@@ -5,3 +5,6 @@ dist/
 !.env.example
 *.log
 .DS_Store
+
+# Generated Prisma Client
+src/generated/prisma/
