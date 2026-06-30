@@ -4,6 +4,11 @@ import { hashPassword, verifyPassword } from "./password.js";
 import { registerInputSchema } from "./register.schema.js";
 import { loginInputSchema } from "./login.schema.js";
 import { env } from "../../config/env.js";
+import { requireAuth } from "./require-auth.js";
+import {
+  loginRateLimiter,
+  registerRateLimiter,
+} from "./auth.rate-limit.js";
 import {
   createSessionToken,
   getSessionExpiresAt,
@@ -25,7 +30,7 @@ function isUniqueConstraintError(error: unknown): boolean {
   );
 }
 
-authRouter.post("/register", async (req, res, next) => {
+authRouter.post("/register", registerRateLimiter, async (req, res, next) => {
   const parsedInput = registerInputSchema.safeParse(req.body);
 
   if (!parsedInput.success) {
@@ -57,7 +62,7 @@ try {
   return next(error);
 }
 });
-authRouter.post("/login", async (req, res, next) => {
+authRouter.post("/login", loginRateLimiter, async (req, res, next) => {
   const parsedInput = loginInputSchema.safeParse(req.body);
 
   if (!parsedInput.success) {
@@ -109,6 +114,45 @@ res.cookie(SESSION_COOKIE_NAME, rawSessionToken, {
 return res.status(200).json({
   message: "Login successful.",
 });
+  } catch (error) {
+    return next(error);
+  }
+});
+authRouter.post("/logout", requireAuth, async (req, res, next) => {
+  const auth = req.auth;
+
+  if (!auth) {
+    return res.status(401).json({
+      error: "Authentication required",
+    });
+  }
+
+  try {
+    const result = await prisma.session.updateMany({
+      where: {
+        id: auth.sessionId,
+        userId: auth.userId,
+        revokedAt: null,
+      },
+      data: {
+        revokedAt: new Date(),
+      },
+    });
+
+    if (result.count !== 1) {
+      return res.status(401).json({
+        error: "Authentication required",
+      });
+    }
+
+    res.clearCookie(SESSION_COOKIE_NAME, {
+      httpOnly: true,
+      sameSite: "lax",
+      secure: env.NODE_ENV === "production",
+      path: "/",
+    });
+
+    return res.status(204).send();
   } catch (error) {
     return next(error);
   }
