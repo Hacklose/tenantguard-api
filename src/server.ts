@@ -1,13 +1,8 @@
-import express from "express";
-import { healthRouter } from "./routes/health.js";
+import { app } from "./app.js";
+import { env } from "./config/env.js";
 
-const app = express();
-const port = Number(process.env.PORT ?? 3000);
-
-app.use(express.json());
-
-app.use("/health", healthRouter);
-
-app.listen(port, "0.0.0.0", () => {
-  console.log(`TenantGuard Labs API is listening on http://localhost:${port}`);
+app.listen(env.PORT, "0.0.0.0", () => {
+  console.log(
+    `TenantGuard Labs API is listening on http://localhost:${env.PORT}`,
+  );
 });
