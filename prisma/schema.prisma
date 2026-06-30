@@ -35,6 +35,7 @@ model User {
   memberships Membership[]
   sessions    Session[]
   auditEvents AuditEvent[] @relation("AuditActor")
+  passwordHash String @db.VarChar(255)
 }
 
 model Organization {
@@ -78,7 +79,7 @@ model Project {
 model Session {
   id        String    @id @default(uuid()) @db.Uuid
   userId    String    @db.Uuid
-  tokenHash String    @unique
+  tokenHash String @unique @db.Char(64)
   expiresAt DateTime
   revokedAt DateTime?
   createdAt DateTime  @default(now())
