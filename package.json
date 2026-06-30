@@ -4,7 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-   "test": "vitest run",
+   "test": "NODE_ENV=test vitest run",
 "test:watch": "vitest",
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
