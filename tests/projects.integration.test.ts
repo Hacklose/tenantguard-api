@@ -366,4 +366,446 @@ describe("projects API", () => {
 
     expect(projectCount).toBe(0);
   });
+
+  it("rejects project reading without a session", async () => {
+    await request(app)
+      .get(
+        "/workspaces/acme-security/projects/00000000-0000-0000-0000-000000000000",
+      )
+      .expect(401);
+  });
+
+  it("allows a MEMBER to read a project from the current workspace", async () => {
+    const owner = await createTestUser("project-read-owner");
+    const member = await createTestUser("project-read-member");
+
+    const workspace = await createWorkspaceForUser(
+      owner.id,
+      "project-read",
+    );
+
+    await addMembership(member.id, workspace.id, "MEMBER");
+
+    const project = await createProjectForWorkspace(
+      workspace.id,
+      "Member Can Read",
+      "Visible inside the current workspace.",
+    );
+
+    const memberCookie = await createAuthenticatedCookie(member.id);
+
+    const response = await request(app)
+      .get(`/workspaces/${workspace.slug}/projects/${project.id}`)
+      .set("Cookie", memberCookie)
+      .expect(200);
+
+    expect(response.body.project).toMatchObject({
+      id: project.id,
+      name: project.name,
+      description: project.description,
+    });
+
+    expect(response.body.project).not.toHaveProperty("organizationId");
+  });
+
+  it("returns the same 404 for a missing project and a Globex project", async () => {
+    const acmeOwner = await createTestUser("project-bola-acme-owner");
+    const globexOwner = await createTestUser("project-bola-globex-owner");
+
+    const acmeWorkspace = await createWorkspaceForUser(
+      acmeOwner.id,
+      "project-bola-acme",
+    );
+
+    const globexWorkspace = await createWorkspaceForUser(
+      globexOwner.id,
+      "project-bola-globex",
+    );
+
+    const globexProject = await createProjectForWorkspace(
+      globexWorkspace.id,
+      "Globex Secret",
+      "Must never be returned to Acme.",
+    );
+
+    const acmeOwnerCookie = await createAuthenticatedCookie(acmeOwner.id);
+
+    const crossTenantResponse = await request(app)
+      .get(
+        `/workspaces/${acmeWorkspace.slug}/projects/${globexProject.id}`,
+      )
+      .set("Cookie", acmeOwnerCookie)
+      .expect(404);
+
+    const missingProjectResponse = await request(app)
+      .get(
+        `/workspaces/${acmeWorkspace.slug}/projects/${randomUUID()}`,
+      )
+      .set("Cookie", acmeOwnerCookie)
+      .expect(404);
+
+    expect(crossTenantResponse.body).toEqual({
+      error: "Project not found",
+    });
+
+    expect(missingProjectResponse.body).toEqual(
+      crossTenantResponse.body,
+    );
+  });
+
+  it("rejects project updates without a session", async () => {
+    await request(app)
+      .patch(
+        "/workspaces/acme-security/projects/00000000-0000-0000-0000-000000000000",
+      )
+      .send({
+        name: "Unauthenticated update",
+      })
+      .expect(401);
+  });
+
+  it("rejects project updates by a MEMBER without side effects", async () => {
+    const owner = await createTestUser("project-update-member-owner");
+    const member = await createTestUser("project-update-member-user");
+
+    const workspace = await createWorkspaceForUser(
+      owner.id,
+      "member-cannot-update",
+    );
+
+    await addMembership(member.id, workspace.id, "MEMBER");
+
+    const project = await createProjectForWorkspace(
+      workspace.id,
+      "Original Project",
+      "Original description",
+    );
+
+    const memberCookie = await createAuthenticatedCookie(member.id);
+
+    await request(app)
+      .patch(`/workspaces/${workspace.slug}/projects/${project.id}`)
+      .set("Cookie", memberCookie)
+      .send({
+        name: "Forbidden Update",
+      })
+      .expect(403)
+      .expect({
+        error: "Insufficient permissions",
+      });
+
+    const unchangedProject = await prisma.project.findUnique({
+      where: {
+        id: project.id,
+      },
+    });
+
+    expect(unchangedProject).toMatchObject({
+      name: project.name,
+      description: project.description,
+    });
+  });
+
+  it("allows an ADMIN to update a project and writes an audit event", async () => {
+    const owner = await createTestUser("project-update-admin-owner");
+    const admin = await createTestUser("project-update-admin-user");
+
+    const workspace = await createWorkspaceForUser(
+      owner.id,
+      "admin-updates-project",
+    );
+
+    await addMembership(admin.id, workspace.id, "ADMIN");
+
+    const project = await createProjectForWorkspace(
+      workspace.id,
+      "Original Name",
+      "Original description",
+    );
+
+    const adminCookie = await createAuthenticatedCookie(admin.id);
+
+    const response = await request(app)
+      .patch(`/workspaces/${workspace.slug}/projects/${project.id}`)
+      .set("Cookie", adminCookie)
+      .send({
+        name: "Updated Name",
+        description: "Updated description",
+      })
+      .expect(200);
+
+    expect(response.body.project).toMatchObject({
+      id: project.id,
+      name: "Updated Name",
+      description: "Updated description",
+    });
+
+    expect(response.body.project).not.toHaveProperty("organizationId");
+
+    const updatedProject = await prisma.project.findUnique({
+      where: {
+        id: project.id,
+      },
+    });
+
+    expect(updatedProject).toMatchObject({
+      organizationId: workspace.id,
+      name: "Updated Name",
+      description: "Updated description",
+    });
+
+    const auditEvent = await prisma.auditEvent.findFirst({
+      where: {
+        organizationId: workspace.id,
+        actorUserId: admin.id,
+        action: "PROJECT_UPDATED",
+        targetType: "Project",
+        targetId: project.id,
+      },
+    });
+
+    expect(auditEvent?.metadata).toEqual({
+      previous: {
+        name: project.name,
+        description: project.description,
+      },
+      updated: {
+        name: "Updated Name",
+        description: "Updated description",
+      },
+    });
+  });
+
+  it("returns 404 and leaves Globex unchanged when Acme targets a Globex project", async () => {
+    const acmeOwner = await createTestUser("project-update-acme-owner");
+    const globexOwner = await createTestUser("project-update-globex-owner");
+
+    const acmeWorkspace = await createWorkspaceForUser(
+      acmeOwner.id,
+      "update-acme",
+    );
+
+    const globexWorkspace = await createWorkspaceForUser(
+      globexOwner.id,
+      "update-globex",
+    );
+
+    const globexProject = await createProjectForWorkspace(
+      globexWorkspace.id,
+      "Globex Original",
+      "Globex private description",
+    );
+
+    const acmeOwnerCookie = await createAuthenticatedCookie(acmeOwner.id);
+
+    await request(app)
+      .patch(
+        `/workspaces/${acmeWorkspace.slug}/projects/${globexProject.id}`,
+      )
+      .set("Cookie", acmeOwnerCookie)
+      .send({
+        name: "Acme Must Not Change This",
+      })
+      .expect(404)
+      .expect({
+        error: "Project not found",
+      });
+
+    const unchangedGlobexProject = await prisma.project.findUnique({
+      where: {
+        id: globexProject.id,
+      },
+    });
+
+    expect(unchangedGlobexProject).toMatchObject({
+      name: globexProject.name,
+      description: globexProject.description,
+      organizationId: globexWorkspace.id,
+    });
+  });
+
+  it("rejects privileged and empty project update bodies", async () => {
+    const owner = await createTestUser("project-update-strict-owner");
+
+    const workspace = await createWorkspaceForUser(
+      owner.id,
+      "strict-project-update",
+    );
+
+    const project = await createProjectForWorkspace(
+      workspace.id,
+      "Strict Project",
+      "Must stay unchanged",
+    );
+
+    const ownerCookie = await createAuthenticatedCookie(owner.id);
+
+    await request(app)
+      .patch(`/workspaces/${workspace.slug}/projects/${project.id}`)
+      .set("Cookie", ownerCookie)
+      .send({
+        organizationId: "attacker-controlled-organization-id",
+        createdAt: "2020-01-01T00:00:00.000Z",
+      })
+      .expect(422)
+      .expect({
+        error: "Invalid project update data",
+      });
+
+    await request(app)
+      .patch(`/workspaces/${workspace.slug}/projects/${project.id}`)
+      .set("Cookie", ownerCookie)
+      .send({})
+      .expect(422)
+      .expect({
+        error: "Invalid project update data",
+      });
+
+    const unchangedProject = await prisma.project.findUnique({
+      where: {
+        id: project.id,
+      },
+    });
+
+    expect(unchangedProject).toMatchObject({
+      name: project.name,
+      description: project.description,
+    });
+  });
+
+  it("rejects project deletion without a session", async () => {
+    await request(app)
+      .delete(
+        "/workspaces/acme-security/projects/00000000-0000-0000-0000-000000000000",
+      )
+      .expect(401);
+  });
+
+  it("rejects project deletion by a MEMBER without side effects", async () => {
+    const owner = await createTestUser("project-delete-member-owner");
+    const member = await createTestUser("project-delete-member-user");
+
+    const workspace = await createWorkspaceForUser(
+      owner.id,
+      "member-cannot-delete",
+    );
+
+    await addMembership(member.id, workspace.id, "MEMBER");
+
+    const project = await createProjectForWorkspace(
+      workspace.id,
+      "Protected Project",
+      "Must remain after forbidden request",
+    );
+
+    const memberCookie = await createAuthenticatedCookie(member.id);
+
+    await request(app)
+      .delete(`/workspaces/${workspace.slug}/projects/${project.id}`)
+      .set("Cookie", memberCookie)
+      .expect(403)
+      .expect({
+        error: "Insufficient permissions",
+      });
+
+    const unchangedProject = await prisma.project.findUnique({
+      where: {
+        id: project.id,
+      },
+    });
+
+    expect(unchangedProject).not.toBeNull();
+  });
+
+  it("allows an ADMIN to delete a project and writes an audit event", async () => {
+    const owner = await createTestUser("project-delete-admin-owner");
+    const admin = await createTestUser("project-delete-admin-user");
+
+    const workspace = await createWorkspaceForUser(
+      owner.id,
+      "admin-deletes-project",
+    );
+
+    await addMembership(admin.id, workspace.id, "ADMIN");
+
+    const project = await createProjectForWorkspace(
+      workspace.id,
+      "Delete Me",
+      "Will be deleted",
+    );
+
+    const adminCookie = await createAuthenticatedCookie(admin.id);
+
+    await request(app)
+      .delete(`/workspaces/${workspace.slug}/projects/${project.id}`)
+      .set("Cookie", adminCookie)
+      .expect(204);
+
+    const deletedProject = await prisma.project.findUnique({
+      where: {
+        id: project.id,
+      },
+    });
+
+    expect(deletedProject).toBeNull();
+
+    const auditEvent = await prisma.auditEvent.findFirst({
+      where: {
+        organizationId: workspace.id,
+        actorUserId: admin.id,
+        action: "PROJECT_DELETED",
+        targetType: "Project",
+        targetId: project.id,
+      },
+    });
+
+    expect(auditEvent?.metadata).toEqual({
+      name: project.name,
+    });
+  });
+
+  it("returns 404 and leaves Globex unchanged when Acme deletes a Globex project", async () => {
+    const acmeOwner = await createTestUser("project-delete-acme-owner");
+    const globexOwner = await createTestUser("project-delete-globex-owner");
+
+    const acmeWorkspace = await createWorkspaceForUser(
+      acmeOwner.id,
+      "delete-acme",
+    );
+
+    const globexWorkspace = await createWorkspaceForUser(
+      globexOwner.id,
+      "delete-globex",
+    );
+
+    const globexProject = await createProjectForWorkspace(
+      globexWorkspace.id,
+      "Globex Protected",
+      "Must survive Acme request",
+    );
+
+    const acmeOwnerCookie = await createAuthenticatedCookie(acmeOwner.id);
+
+    await request(app)
+      .delete(
+        `/workspaces/${acmeWorkspace.slug}/projects/${globexProject.id}`,
+      )
+      .set("Cookie", acmeOwnerCookie)
+      .expect(404)
+      .expect({
+        error: "Project not found",
+      });
+
+    const unchangedGlobexProject = await prisma.project.findUnique({
+      where: {
+        id: globexProject.id,
+      },
+    });
+
+    expect(unchangedGlobexProject).toMatchObject({
+      id: globexProject.id,
+      organizationId: globexWorkspace.id,
+      name: globexProject.name,
+    });
+  });
 });

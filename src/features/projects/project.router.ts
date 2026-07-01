@@ -4,11 +4,17 @@ import { prisma } from "../../lib/prisma.js";
 import { requireAuth } from "../auth/require-auth.js";
 import { requireWorkspaceMembership } from "../workspaces/require-workspace-membership.js";
 import { requireWorkspaceRole } from "../workspaces/require-workspace-role.js";
-import { createProjectInputSchema } from "./project.schema.js";
+import {
+  createProjectInputSchema,
+  projectIdParamSchema,
+  updateProjectInputSchema,
+} from "./project.schema.js";
 
 export const projectRouter = Router({
   mergeParams: true,
 });
+
+
 
 projectRouter.get(
   "/",
@@ -108,6 +114,245 @@ projectRouter.post(
       return res.status(201).json({
         project,
       });
+    } catch (error) {
+      return next(error);
+    }
+  },
+);
+
+projectRouter.get(
+  "/:projectId",
+  requireAuth,
+  requireWorkspaceMembership,
+  async (req, res, next) => {
+    const workspaceAuth = req.workspaceAuth;
+
+    if (!workspaceAuth) {
+      return next(
+        new Error("Workspace authorization context is missing."),
+      );
+    }
+
+    const parsedProjectId = projectIdParamSchema.safeParse(
+      req.params.projectId,
+    );
+
+    if (!parsedProjectId.success) {
+      return res.status(404).json({
+        error: "Project not found",
+      });
+    }
+
+    try {
+      const project = await prisma.project.findFirst({
+        where: {
+          id: parsedProjectId.data,
+          organizationId: workspaceAuth.organizationId,
+        },
+        select: {
+          id: true,
+          name: true,
+          description: true,
+          createdAt: true,
+          updatedAt: true,
+        },
+      });
+
+      if (!project) {
+        return res.status(404).json({
+          error: "Project not found",
+        });
+      }
+
+      return res.status(200).json({
+        project,
+      });
+    } catch (error) {
+      return next(error);
+    }
+  },
+);
+
+projectRouter.patch(
+  "/:projectId",
+  requireAuth,
+  requireWorkspaceMembership,
+  requireWorkspaceRole("OWNER", "ADMIN"),
+  async (req, res, next) => {
+    const workspaceAuth = req.workspaceAuth;
+    const auth = req.auth;
+
+    if (!workspaceAuth || !auth) {
+      return next(
+        new Error("Workspace authorization context is missing."),
+      );
+    }
+
+    const parsedProjectId = projectIdParamSchema.safeParse(
+      req.params.projectId,
+    );
+
+    if (!parsedProjectId.success) {
+      return res.status(404).json({
+        error: "Project not found",
+      });
+    }
+
+    const parsedInput = updateProjectInputSchema.safeParse(req.body);
+
+    if (!parsedInput.success) {
+      return res.status(422).json({
+        error: "Invalid project update data",
+      });
+    }
+
+    try {
+      const result = await prisma.$transaction(async (tx) => {
+        const existingProject = await tx.project.findFirst({
+          where: {
+            id: parsedProjectId.data,
+            organizationId: workspaceAuth.organizationId,
+          },
+          select: {
+            id: true,
+            name: true,
+            description: true,
+          },
+        });
+
+        if (!existingProject) {
+          return null;
+        }
+
+        const updatedProject = await tx.project.update({
+          where: {
+            id: existingProject.id,
+          },
+          data: {
+            ...(parsedInput.data.name !== undefined
+              ? { name: parsedInput.data.name }
+              : {}),
+            ...(parsedInput.data.description !== undefined
+              ? { description: parsedInput.data.description }
+              : {}),
+          },
+          select: {
+            id: true,
+            name: true,
+            description: true,
+            createdAt: true,
+            updatedAt: true,
+          },
+        });
+
+        await tx.auditEvent.create({
+          data: {
+            organizationId: workspaceAuth.organizationId,
+            actorUserId: auth.userId,
+            action: "PROJECT_UPDATED",
+            targetType: "Project",
+            targetId: updatedProject.id,
+            metadata: {
+              previous: {
+                name: existingProject.name,
+                description: existingProject.description,
+              },
+              updated: {
+                name: updatedProject.name,
+                description: updatedProject.description,
+              },
+            },
+          },
+        });
+
+        return updatedProject;
+      });
+
+      if (!result) {
+        return res.status(404).json({
+          error: "Project not found",
+        });
+      }
+
+      return res.status(200).json({
+        project: result,
+      });
+    } catch (error) {
+      return next(error);
+    }
+  },
+);
+projectRouter.delete(
+  "/:projectId",
+  requireAuth,
+  requireWorkspaceMembership,
+  requireWorkspaceRole("OWNER", "ADMIN"),
+  async (req, res, next) => {
+    const workspaceAuth = req.workspaceAuth;
+    const auth = req.auth;
+
+    if (!workspaceAuth || !auth) {
+      return next(
+        new Error("Workspace authorization context is missing."),
+      );
+    }
+
+    const parsedProjectId = projectIdParamSchema.safeParse(
+      req.params.projectId,
+    );
+
+    if (!parsedProjectId.success) {
+      return res.status(404).json({
+        error: "Project not found",
+      });
+    }
+
+    try {
+      const result = await prisma.$transaction(async (tx) => {
+        const project = await tx.project.findFirst({
+          where: {
+            id: parsedProjectId.data,
+            organizationId: workspaceAuth.organizationId,
+          },
+          select: {
+            id: true,
+            name: true,
+          },
+        });
+
+        if (!project) {
+          return null;
+        }
+
+        await tx.project.delete({
+          where: {
+            id: project.id,
+          },
+        });
+
+        await tx.auditEvent.create({
+          data: {
+            organizationId: workspaceAuth.organizationId,
+            actorUserId: auth.userId,
+            action: "PROJECT_DELETED",
+            targetType: "Project",
+            targetId: project.id,
+            metadata: {
+              name: project.name,
+            },
+          },
+        });
+
+        return project;
+      });
+
+      if (!result) {
+        return res.status(404).json({
+          error: "Project not found",
+        });
+      }
+
+      return res.status(204).send();
     } catch (error) {
       return next(error);
     }
