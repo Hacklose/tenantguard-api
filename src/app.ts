@@ -5,6 +5,7 @@ import { healthRouter } from "./routes/health.js";
 import cookieParser from "cookie-parser";
 import { workspaceRouter } from "./features/workspaces/workspace.router.js";
 import { meRouter } from "./features/users/me.router.js";
+import { projectRouter } from "./features/projects/project.router.js";
 export const app = express();
 
 app.disable("x-powered-by");
@@ -20,4 +21,5 @@ app.use("/health", healthRouter);
 app.use("/auth", authRouter);
 app.use("/me", meRouter);
 app.use("/workspaces", workspaceRouter);
+app.use("/workspaces/:workspaceSlug/projects", projectRouter);
 app.use(errorHandler);
