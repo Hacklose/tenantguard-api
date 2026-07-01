@@ -421,3 +421,99 @@ workspaceRouter.patch(
     }
   },
 );
+
+workspaceRouter.delete(
+  "/:workspaceSlug/memberships/:memberUserId",
+  requireAuth,
+  requireWorkspaceMembership,
+  requireWorkspaceRole("OWNER"),
+  async (req, res, next) => {
+    const workspaceAuth = req.workspaceAuth;
+    const auth = req.auth;
+
+    if (!workspaceAuth || !auth) {
+      return next(
+        new Error("Workspace authorization context is missing."),
+      );
+    }
+
+    const parsedMemberUserId = memberUserIdParamSchema.safeParse(
+      req.params.memberUserId,
+    );
+
+    if (!parsedMemberUserId.success) {
+      return rejectMembershipNotFound(res);
+    }
+
+    try {
+      const result = await prisma.$transaction(async (tx) => {
+        const targetMembership = await tx.membership.findUnique({
+          where: {
+            userId_organizationId: {
+              userId: parsedMemberUserId.data,
+              organizationId: workspaceAuth.organizationId,
+            },
+          },
+          select: {
+            role: true,
+          },
+        });
+
+        if (!targetMembership) {
+          return { type: "not_found" as const };
+        }
+
+        if (targetMembership.role === "OWNER") {
+          const ownerCount = await tx.membership.count({
+            where: {
+              organizationId: workspaceAuth.organizationId,
+              role: "OWNER",
+            },
+          });
+
+          if (ownerCount <= 1) {
+            return { type: "final_owner" as const };
+          }
+        }
+
+        await tx.membership.delete({
+          where: {
+            userId_organizationId: {
+              userId: parsedMemberUserId.data,
+              organizationId: workspaceAuth.organizationId,
+            },
+          },
+        });
+
+        await tx.auditEvent.create({
+          data: {
+            organizationId: workspaceAuth.organizationId,
+            actorUserId: auth.userId,
+            action: "MEMBER_REMOVED",
+            targetType: "Membership",
+            targetId: parsedMemberUserId.data,
+            metadata: {
+              role: targetMembership.role,
+            },
+          },
+        });
+
+        return { type: "deleted" as const };
+      });
+
+      if (result.type === "not_found") {
+        return rejectMembershipNotFound(res);
+      }
+
+      if (result.type === "final_owner") {
+        return res.status(409).json({
+          error: "Cannot remove the final OWNER",
+        });
+      }
+
+      return res.status(204).send();
+    } catch (error) {
+      return next(error);
+    }
+  },
+);

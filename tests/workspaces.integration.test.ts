@@ -780,4 +780,221 @@ describe("workspaces API", () => {
 
     expect(memberMembership?.role).toBe("MEMBER");
   });
+    it("rejects membership deletion without a session", async () => {
+    await request(app)
+      .delete(
+        "/workspaces/acme-security/memberships/00000000-0000-0000-0000-000000000000",
+      )
+      .expect(401);
+  });
+
+  it("rejects membership deletion by an ADMIN and MEMBER", async () => {
+    const owner = await createTestUser("delete-permissions-owner");
+    const admin = await createTestUser("delete-permissions-admin");
+    const member = await createTestUser("delete-permissions-member");
+    const target = await createTestUser("delete-permissions-target");
+
+    const workspace = await createWorkspaceForUser(
+      owner.id,
+      "Delete Permissions",
+    );
+
+    await addMembership(admin.id, workspace.id, "ADMIN");
+    await addMembership(member.id, workspace.id, "MEMBER");
+    await addMembership(target.id, workspace.id, "MEMBER");
+
+    const adminCookie = await createAuthenticatedCookie(admin.id);
+    const memberCookie = await createAuthenticatedCookie(member.id);
+
+    await request(app)
+      .delete(
+        `/workspaces/${workspace.slug}/memberships/${target.id}`,
+      )
+      .set("Cookie", adminCookie)
+      .expect(403)
+      .expect({
+        error: "Insufficient permissions",
+      });
+
+    await request(app)
+      .delete(
+        `/workspaces/${workspace.slug}/memberships/${target.id}`,
+      )
+      .set("Cookie", memberCookie)
+      .expect(403)
+      .expect({
+        error: "Insufficient permissions",
+      });
+
+    const targetMembership = await prisma.membership.findUnique({
+      where: {
+        userId_organizationId: {
+          userId: target.id,
+          organizationId: workspace.id,
+        },
+      },
+    });
+
+    expect(targetMembership?.role).toBe("MEMBER");
+  });
+
+  it("allows an OWNER to remove a MEMBER and writes an audit event", async () => {
+    const owner = await createTestUser("delete-success-owner");
+    const target = await createTestUser("delete-success-target");
+
+    const workspace = await createWorkspaceForUser(
+      owner.id,
+      "Delete Success",
+    );
+
+    await addMembership(target.id, workspace.id, "MEMBER");
+
+    const ownerCookie = await createAuthenticatedCookie(owner.id);
+
+    await request(app)
+      .delete(
+        `/workspaces/${workspace.slug}/memberships/${target.id}`,
+      )
+      .set("Cookie", ownerCookie)
+      .expect(204);
+
+    const deletedMembership = await prisma.membership.findUnique({
+      where: {
+        userId_organizationId: {
+          userId: target.id,
+          organizationId: workspace.id,
+        },
+      },
+    });
+
+    expect(deletedMembership).toBeNull();
+
+    const auditEvent = await prisma.auditEvent.findFirst({
+      where: {
+        organizationId: workspace.id,
+        actorUserId: owner.id,
+        action: "MEMBER_REMOVED",
+        targetType: "Membership",
+        targetId: target.id,
+      },
+    });
+
+    expect(auditEvent?.metadata).toEqual({
+      role: "MEMBER",
+    });
+  });
+
+  it("returns 404 when an OWNER targets a membership from another workspace for deletion", async () => {
+    const acmeOwner = await createTestUser("delete-cross-acme-owner");
+    const globexOwner = await createTestUser("delete-cross-globex-owner");
+    const globexMember = await createTestUser("delete-cross-globex-member");
+
+    const acmeWorkspace = await createWorkspaceForUser(
+      acmeOwner.id,
+      "Acme Delete Scope",
+    );
+
+    const globexWorkspace = await createWorkspaceForUser(
+      globexOwner.id,
+      "Globex Delete Scope",
+    );
+
+    await addMembership(
+      globexMember.id,
+      globexWorkspace.id,
+      "MEMBER",
+    );
+
+    const acmeOwnerCookie = await createAuthenticatedCookie(acmeOwner.id);
+
+    await request(app)
+      .delete(
+        `/workspaces/${acmeWorkspace.slug}/memberships/${globexMember.id}`,
+      )
+      .set("Cookie", acmeOwnerCookie)
+      .expect(404)
+      .expect({
+        error: "Membership not found",
+      });
+
+    const globexMembership = await prisma.membership.findUnique({
+      where: {
+        userId_organizationId: {
+          userId: globexMember.id,
+          organizationId: globexWorkspace.id,
+        },
+      },
+    });
+
+    expect(globexMembership?.role).toBe("MEMBER");
+  });
+
+  it("does not allow the final OWNER to be removed", async () => {
+    const owner = await createTestUser("delete-final-owner");
+
+    const workspace = await createWorkspaceForUser(
+      owner.id,
+      "Delete Final Owner",
+    );
+
+    const ownerCookie = await createAuthenticatedCookie(owner.id);
+
+    await request(app)
+      .delete(
+        `/workspaces/${workspace.slug}/memberships/${owner.id}`,
+      )
+      .set("Cookie", ownerCookie)
+      .expect(409)
+      .expect({
+        error: "Cannot remove the final OWNER",
+      });
+
+    const ownerMembership = await prisma.membership.findUnique({
+      where: {
+        userId_organizationId: {
+          userId: owner.id,
+          organizationId: workspace.id,
+        },
+      },
+    });
+
+    expect(ownerMembership?.role).toBe("OWNER");
+  });
+
+  it("allows an OWNER to remove another OWNER when one OWNER remains", async () => {
+    const firstOwner = await createTestUser("delete-multi-first-owner");
+    const secondOwner = await createTestUser("delete-multi-second-owner");
+
+    const workspace = await createWorkspaceForUser(
+      firstOwner.id,
+      "Delete One Of Two Owners",
+    );
+
+    await addMembership(secondOwner.id, workspace.id, "OWNER");
+
+    const firstOwnerCookie = await createAuthenticatedCookie(firstOwner.id);
+
+    await request(app)
+      .delete(
+        `/workspaces/${workspace.slug}/memberships/${secondOwner.id}`,
+      )
+      .set("Cookie", firstOwnerCookie)
+      .expect(204);
+
+    const remainingOwners = await prisma.membership.findMany({
+      where: {
+        organizationId: workspace.id,
+        role: "OWNER",
+      },
+      select: {
+        userId: true,
+      },
+    });
+
+    expect(remainingOwners).toEqual([
+      {
+        userId: firstOwner.id,
+      },
+    ]);
+  });
 });
