@@ -358,4 +358,178 @@ describe("workspaces API", () => {
 
     expect(missingResponse.body).toEqual(inaccessibleResponse.body);
   });
+    it("rejects membership creation without a session", async () => {
+    await request(app)
+      .post("/workspaces/acme-security/memberships")
+      .send({
+        email: "member@example.test",
+        role: "MEMBER",
+      })
+      .expect(401);
+  });
+
+  it("rejects membership creation by an ADMIN", async () => {
+    const owner = await createTestUser("admin-create-owner");
+    const admin = await createTestUser("admin-create-admin");
+    const invitedUser = await createTestUser("admin-create-invited");
+
+    const workspace = await createWorkspaceForUser(
+      owner.id,
+      "Admin Cannot Add",
+    );
+
+    await addMembership(admin.id, workspace.id, "ADMIN");
+
+    const adminCookie = await createAuthenticatedCookie(admin.id);
+
+    await request(app)
+      .post(`/workspaces/${workspace.slug}/memberships`)
+      .set("Cookie", adminCookie)
+      .send({
+        email: invitedUser.email,
+        role: "MEMBER",
+      })
+      .expect(403)
+      .expect({
+        error: "Insufficient permissions",
+      });
+
+    const membership = await prisma.membership.findUnique({
+      where: {
+        userId_organizationId: {
+          userId: invitedUser.id,
+          organizationId: workspace.id,
+        },
+      },
+    });
+
+    expect(membership).toBeNull();
+  });
+
+  it("rejects membership creation by a MEMBER", async () => {
+    const owner = await createTestUser("member-create-owner");
+    const member = await createTestUser("member-create-member");
+    const invitedUser = await createTestUser("member-create-invited");
+
+    const workspace = await createWorkspaceForUser(
+      owner.id,
+      "Member Cannot Add",
+    );
+
+    await addMembership(member.id, workspace.id, "MEMBER");
+
+    const memberCookie = await createAuthenticatedCookie(member.id);
+
+    await request(app)
+      .post(`/workspaces/${workspace.slug}/memberships`)
+      .set("Cookie", memberCookie)
+      .send({
+        email: invitedUser.email,
+        role: "MEMBER",
+      })
+      .expect(403)
+      .expect({
+        error: "Insufficient permissions",
+      });
+
+    const membership = await prisma.membership.findUnique({
+      where: {
+        userId_organizationId: {
+          userId: invitedUser.id,
+          organizationId: workspace.id,
+        },
+      },
+    });
+
+    expect(membership).toBeNull();
+  });
+
+  it("allows an OWNER to add an existing user and writes an audit event", async () => {
+    const owner = await createTestUser("owner-add-owner");
+    const invitedUser = await createTestUser("owner-add-invited");
+
+    const workspace = await createWorkspaceForUser(
+      owner.id,
+      "Owner Adds Member",
+    );
+
+    const ownerCookie = await createAuthenticatedCookie(owner.id);
+
+    const response = await request(app)
+      .post(`/workspaces/${workspace.slug}/memberships`)
+      .set("Cookie", ownerCookie)
+      .send({
+        email: invitedUser.email,
+        role: "MEMBER",
+      })
+      .expect(201);
+
+    expect(response.body.membership).toMatchObject({
+      userId: invitedUser.id,
+      email: invitedUser.email,
+      displayName: invitedUser.displayName,
+      role: "MEMBER",
+    });
+
+    const membership = await prisma.membership.findUnique({
+      where: {
+        userId_organizationId: {
+          userId: invitedUser.id,
+          organizationId: workspace.id,
+        },
+      },
+    });
+
+    expect(membership?.role).toBe("MEMBER");
+
+    const auditEvent = await prisma.auditEvent.findFirst({
+      where: {
+        organizationId: workspace.id,
+        actorUserId: owner.id,
+        action: "MEMBER_ADDED",
+        targetType: "Membership",
+        targetId: invitedUser.id,
+      },
+    });
+
+    expect(auditEvent).not.toBeNull();
+  });
+
+  it("rejects privileged membership fields supplied by the client", async () => {
+    const owner = await createTestUser("membership-mass-owner");
+    const invitedUser = await createTestUser("membership-mass-invited");
+
+    const workspace = await createWorkspaceForUser(
+      owner.id,
+      "Membership Strict Body",
+    );
+
+    const ownerCookie = await createAuthenticatedCookie(owner.id);
+
+    await request(app)
+      .post(`/workspaces/${workspace.slug}/memberships`)
+      .set("Cookie", ownerCookie)
+      .send({
+        email: invitedUser.email,
+        role: "MEMBER",
+        userId: owner.id,
+        organizationId: "attacker-controlled-organization-id",
+        actorUserId: owner.id,
+      })
+      .expect(422)
+      .expect({
+        error: "Invalid membership data",
+      });
+
+    const membership = await prisma.membership.findUnique({
+      where: {
+        userId_organizationId: {
+          userId: invitedUser.id,
+          organizationId: workspace.id,
+        },
+      },
+    });
+
+    expect(membership).toBeNull();
+  });
 });
