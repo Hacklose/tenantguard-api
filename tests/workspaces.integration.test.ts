@@ -358,7 +358,8 @@ describe("workspaces API", () => {
 
     expect(missingResponse.body).toEqual(inaccessibleResponse.body);
   });
-    it("rejects membership creation without a session", async () => {
+
+  it("rejects membership creation without a session", async () => {
     await request(app)
       .post("/workspaces/acme-security/memberships")
       .send({
@@ -531,5 +532,252 @@ describe("workspaces API", () => {
     });
 
     expect(membership).toBeNull();
+  });
+
+  it("rejects membership role changes without a session", async () => {
+    await request(app)
+      .patch(
+        "/workspaces/acme-security/memberships/00000000-0000-0000-0000-000000000000",
+      )
+      .send({
+        role: "ADMIN",
+      })
+      .expect(401);
+  });
+
+  it("rejects membership role changes by ADMIN and MEMBER", async () => {
+    const owner = await createTestUser("role-change-owner");
+    const admin = await createTestUser("role-change-admin");
+    const member = await createTestUser("role-change-member");
+    const target = await createTestUser("role-change-target");
+
+    const workspace = await createWorkspaceForUser(
+      owner.id,
+      "Role Change Permissions",
+    );
+
+    await addMembership(admin.id, workspace.id, "ADMIN");
+    await addMembership(member.id, workspace.id, "MEMBER");
+    await addMembership(target.id, workspace.id, "MEMBER");
+
+    const adminCookie = await createAuthenticatedCookie(admin.id);
+    const memberCookie = await createAuthenticatedCookie(member.id);
+
+    await request(app)
+      .patch(
+        `/workspaces/${workspace.slug}/memberships/${target.id}`,
+      )
+      .set("Cookie", adminCookie)
+      .send({
+        role: "ADMIN",
+      })
+      .expect(403)
+      .expect({
+        error: "Insufficient permissions",
+      });
+
+    await request(app)
+      .patch(
+        `/workspaces/${workspace.slug}/memberships/${target.id}`,
+      )
+      .set("Cookie", memberCookie)
+      .send({
+        role: "ADMIN",
+      })
+      .expect(403)
+      .expect({
+        error: "Insufficient permissions",
+      });
+
+    const targetMembership = await prisma.membership.findUnique({
+      where: {
+        userId_organizationId: {
+          userId: target.id,
+          organizationId: workspace.id,
+        },
+      },
+    });
+
+    expect(targetMembership?.role).toBe("MEMBER");
+  });
+
+  it("allows an OWNER to change a MEMBER role and writes an audit event", async () => {
+    const owner = await createTestUser("role-change-success-owner");
+    const member = await createTestUser("role-change-success-member");
+
+    const workspace = await createWorkspaceForUser(
+      owner.id,
+      "Role Change Success",
+    );
+
+    await addMembership(member.id, workspace.id, "MEMBER");
+
+    const ownerCookie = await createAuthenticatedCookie(owner.id);
+
+    const response = await request(app)
+      .patch(
+        `/workspaces/${workspace.slug}/memberships/${member.id}`,
+      )
+      .set("Cookie", ownerCookie)
+      .send({
+        role: "ADMIN",
+      })
+      .expect(200);
+
+    expect(response.body.membership).toMatchObject({
+      userId: member.id,
+      email: member.email,
+      displayName: member.displayName,
+      role: "ADMIN",
+    });
+
+    const updatedMembership = await prisma.membership.findUnique({
+      where: {
+        userId_organizationId: {
+          userId: member.id,
+          organizationId: workspace.id,
+        },
+      },
+    });
+
+    expect(updatedMembership?.role).toBe("ADMIN");
+
+    const auditEvent = await prisma.auditEvent.findFirst({
+      where: {
+        organizationId: workspace.id,
+        actorUserId: owner.id,
+        action: "MEMBER_ROLE_CHANGED",
+        targetType: "Membership",
+        targetId: member.id,
+      },
+    });
+
+    expect(auditEvent?.metadata).toEqual({
+      previousRole: "MEMBER",
+      newRole: "ADMIN",
+    });
+  });
+
+  it("returns 404 when an OWNER targets a membership from another workspace", async () => {
+    const acmeOwner = await createTestUser("cross-tenant-acme-owner");
+    const globexOwner = await createTestUser("cross-tenant-globex-owner");
+    const globexMember = await createTestUser("cross-tenant-globex-member");
+
+    const acmeWorkspace = await createWorkspaceForUser(
+      acmeOwner.id,
+      "Acme Role Scope",
+    );
+
+    const globexWorkspace = await createWorkspaceForUser(
+      globexOwner.id,
+      "Globex Role Scope",
+    );
+
+    await addMembership(
+      globexMember.id,
+      globexWorkspace.id,
+      "MEMBER",
+    );
+
+    const acmeOwnerCookie = await createAuthenticatedCookie(acmeOwner.id);
+
+    await request(app)
+      .patch(
+        `/workspaces/${acmeWorkspace.slug}/memberships/${globexMember.id}`,
+      )
+      .set("Cookie", acmeOwnerCookie)
+      .send({
+        role: "ADMIN",
+      })
+      .expect(404)
+      .expect({
+        error: "Membership not found",
+      });
+
+    const globexMembership = await prisma.membership.findUnique({
+      where: {
+        userId_organizationId: {
+          userId: globexMember.id,
+          organizationId: globexWorkspace.id,
+        },
+      },
+    });
+
+    expect(globexMembership?.role).toBe("MEMBER");
+  });
+
+  it("does not allow the final OWNER to be downgraded", async () => {
+    const owner = await createTestUser("final-owner");
+
+    const workspace = await createWorkspaceForUser(
+      owner.id,
+      "Final Owner Protection",
+    );
+
+    const ownerCookie = await createAuthenticatedCookie(owner.id);
+
+    await request(app)
+      .patch(
+        `/workspaces/${workspace.slug}/memberships/${owner.id}`,
+      )
+      .set("Cookie", ownerCookie)
+      .send({
+        role: "ADMIN",
+      })
+      .expect(409)
+      .expect({
+        error: "Cannot change the final OWNER role",
+      });
+
+    const ownerMembership = await prisma.membership.findUnique({
+      where: {
+        userId_organizationId: {
+          userId: owner.id,
+          organizationId: workspace.id,
+        },
+      },
+    });
+
+    expect(ownerMembership?.role).toBe("OWNER");
+  });
+
+  it("rejects OWNER and privileged fields in a role update body", async () => {
+    const owner = await createTestUser("role-update-strict-owner");
+    const member = await createTestUser("role-update-strict-member");
+
+    const workspace = await createWorkspaceForUser(
+      owner.id,
+      "Role Update Strict Body",
+    );
+
+    await addMembership(member.id, workspace.id, "MEMBER");
+
+    const ownerCookie = await createAuthenticatedCookie(owner.id);
+
+    await request(app)
+      .patch(
+        `/workspaces/${workspace.slug}/memberships/${member.id}`,
+      )
+      .set("Cookie", ownerCookie)
+      .send({
+        role: "OWNER",
+        organizationId: "attacker-controlled-organization-id",
+        actorUserId: owner.id,
+      })
+      .expect(422)
+      .expect({
+        error: "Invalid membership update data",
+      });
+
+    const memberMembership = await prisma.membership.findUnique({
+      where: {
+        userId_organizationId: {
+          userId: member.id,
+          organizationId: workspace.id,
+        },
+      },
+    });
+
+    expect(memberMembership?.role).toBe("MEMBER");
   });
 });
