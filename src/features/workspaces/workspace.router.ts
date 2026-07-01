@@ -2,6 +2,7 @@ import { Router, type Response } from "express";
 
 import { prisma } from "../../lib/prisma.js";
 import { requireAuth } from "../auth/require-auth.js";
+import { requireWorkspaceMembership } from "./require-workspace-membership.js";
 import { createWorkspaceInputSchema } from "./workspace.schema.js";
 
 export const workspaceRouter = Router();
@@ -127,3 +128,52 @@ workspaceRouter.get("/", requireAuth, async (req, res, next) => {
     return next(error);
   }
 });
+
+workspaceRouter.get(
+  "/:workspaceSlug/memberships",
+  requireAuth,
+  requireWorkspaceMembership,
+  async (req, res, next) => {
+    const workspaceAuth = req.workspaceAuth;
+
+    if (!workspaceAuth) {
+      return next(
+        new Error("Workspace authorization context is missing."),
+      );
+    }
+
+    try {
+      const memberships = await prisma.membership.findMany({
+        where: {
+          organizationId: workspaceAuth.organizationId,
+        },
+        orderBy: {
+          createdAt: "asc",
+        },
+        select: {
+          role: true,
+          createdAt: true,
+          user: {
+            select: {
+              id: true,
+              email: true,
+              displayName: true,
+            },
+          },
+        },
+      });
+
+      return res.status(200).json({
+        memberships: memberships.map((membership) => ({
+          userId: membership.user.id,
+          email: membership.user.email,
+          displayName: membership.user.displayName,
+          role: membership.role,
+          createdAt: membership.createdAt,
+        })),
+      });
+    } catch (error) {
+      return next(error);
+    }
+  },
+);

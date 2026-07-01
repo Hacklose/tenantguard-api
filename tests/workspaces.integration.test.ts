@@ -89,10 +89,7 @@ async function createAuthenticatedCookie(userId: string) {
   return `${SESSION_COOKIE_NAME}=${rawSessionToken}`;
 }
 
-async function createWorkspaceForUser(
-  userId: string,
-  label: string,
-) {
+async function createWorkspaceForUser(userId: string, label: string) {
   const organization = await prisma.organization.create({
     data: {
       name: createWorkspaceName(label),
@@ -109,6 +106,20 @@ async function createWorkspaceForUser(
   });
 
   return organization;
+}
+
+async function addMembership(
+  userId: string,
+  organizationId: string,
+  role: "OWNER" | "ADMIN" | "MEMBER",
+) {
+  return prisma.membership.create({
+    data: {
+      userId,
+      organizationId,
+      role,
+    },
+  });
 }
 
 describe("workspaces API", () => {
@@ -213,8 +224,8 @@ describe("workspaces API", () => {
         id: globexWorkspace.id,
       }),
     );
-
   });
+
   it("rejects privileged fields supplied by the client", async () => {
     const user = await createTestUser("mass-assignment");
     const sessionCookie = await createAuthenticatedCookie(user.id);
@@ -271,5 +282,80 @@ describe("workspaces API", () => {
     });
 
     expect(organizationsWithSlug).toBe(1);
+  });
+
+  it("rejects membership listing without a session", async () => {
+    await request(app)
+      .get("/workspaces/acme-security/memberships")
+      .expect(401);
+  });
+
+  it("allows a MEMBER to view workspace memberships without sensitive fields", async () => {
+    const owner = await createTestUser("memberships-owner");
+    const member = await createTestUser("memberships-member");
+
+    const workspace = await createWorkspaceForUser(
+      owner.id,
+      "Membership Read",
+    );
+
+    await addMembership(member.id, workspace.id, "MEMBER");
+
+    const sessionCookie = await createAuthenticatedCookie(member.id);
+
+    const response = await request(app)
+      .get(`/workspaces/${workspace.slug}/memberships`)
+      .set("Cookie", sessionCookie)
+      .expect(200);
+
+    expect(response.body.memberships).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          userId: owner.id,
+          email: owner.email,
+          displayName: owner.displayName,
+          role: "OWNER",
+        }),
+        expect.objectContaining({
+          userId: member.id,
+          email: member.email,
+          displayName: member.displayName,
+          role: "MEMBER",
+        }),
+      ]),
+    );
+
+    for (const membership of response.body.memberships) {
+      expect(membership).not.toHaveProperty("passwordHash");
+      expect(membership).not.toHaveProperty("sessions");
+    }
+  });
+
+  it("returns the same 404 for an unknown and inaccessible workspace", async () => {
+    const owner = await createTestUser("hidden-workspace-owner");
+    const outsider = await createTestUser("hidden-workspace-outsider");
+
+    const workspace = await createWorkspaceForUser(
+      owner.id,
+      "Hidden Workspace",
+    );
+
+    const sessionCookie = await createAuthenticatedCookie(outsider.id);
+
+    const inaccessibleResponse = await request(app)
+      .get(`/workspaces/${workspace.slug}/memberships`)
+      .set("Cookie", sessionCookie)
+      .expect(404);
+
+    const missingResponse = await request(app)
+      .get(`/workspaces/${createWorkspaceSlug("missing")}/memberships`)
+      .set("Cookie", sessionCookie)
+      .expect(404);
+
+    expect(inaccessibleResponse.body).toEqual({
+      error: "Workspace not found",
+    });
+
+    expect(missingResponse.body).toEqual(inaccessibleResponse.body);
   });
 });
