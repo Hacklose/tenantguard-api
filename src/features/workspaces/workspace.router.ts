@@ -2,7 +2,11 @@ import { Router, type Response } from "express";
 
 import { prisma } from "../../lib/prisma.js";
 import { requireAuth } from "../auth/require-auth.js";
-import { createMembershipInputSchema } from "./membership.schema.js";
+import {
+  createMembershipInputSchema,
+  memberUserIdParamSchema,
+  updateMembershipRoleInputSchema,
+} from "./membership.schema.js";
 import { requireWorkspaceMembership } from "./require-workspace-membership.js";
 import { requireWorkspaceRole } from "./require-workspace-role.js";
 import { createWorkspaceInputSchema } from "./workspace.schema.js";
@@ -12,6 +16,18 @@ export const workspaceRouter = Router();
 function rejectUnauthenticated(response: Response) {
   return response.status(401).json({
     error: "Authentication required",
+  });
+}
+
+function rejectMembershipNotFound(response: Response) {
+  return response.status(404).json({
+    error: "Membership not found",
+  });
+}
+
+function rejectFinalOwnerRoleChange(response: Response) {
+  return response.status(409).json({
+    error: "Cannot change the final OWNER role",
   });
 }
 
@@ -187,8 +203,9 @@ workspaceRouter.post(
   requireWorkspaceRole("OWNER"),
   async (req, res, next) => {
     const workspaceAuth = req.workspaceAuth;
+    const auth = req.auth;
 
-    if (!workspaceAuth) {
+    if (!workspaceAuth || !auth) {
       return next(
         new Error("Workspace authorization context is missing."),
       );
@@ -234,7 +251,7 @@ workspaceRouter.post(
         await tx.auditEvent.create({
           data: {
             organizationId: workspaceAuth.organizationId,
-            actorUserId: req.auth!.userId,
+            actorUserId: auth.userId,
             action: "MEMBER_ADDED",
             targetType: "Membership",
             targetId: invitedUser.id,
@@ -272,6 +289,134 @@ workspaceRouter.post(
         });
       }
 
+      return next(error);
+    }
+  },
+);
+
+workspaceRouter.patch(
+  "/:workspaceSlug/memberships/:memberUserId",
+  requireAuth,
+  requireWorkspaceMembership,
+  requireWorkspaceRole("OWNER"),
+  async (req, res, next) => {
+    const workspaceAuth = req.workspaceAuth;
+    const auth = req.auth;
+
+    if (!workspaceAuth || !auth) {
+      return next(
+        new Error("Workspace authorization context is missing."),
+      );
+    }
+
+    const parsedMemberUserId = memberUserIdParamSchema.safeParse(
+      req.params.memberUserId,
+    );
+
+    if (!parsedMemberUserId.success) {
+      return rejectMembershipNotFound(res);
+    }
+
+    const parsedInput = updateMembershipRoleInputSchema.safeParse(req.body);
+
+    if (!parsedInput.success) {
+      return res.status(422).json({
+        error: "Invalid membership update data",
+      });
+    }
+
+    try {
+      const result = await prisma.$transaction(async (tx) => {
+        const targetMembership = await tx.membership.findUnique({
+          where: {
+            userId_organizationId: {
+              userId: parsedMemberUserId.data,
+              organizationId: workspaceAuth.organizationId,
+            },
+          },
+          select: {
+            role: true,
+            user: {
+              select: {
+                id: true,
+                email: true,
+                displayName: true,
+              },
+            },
+          },
+        });
+
+        if (!targetMembership) {
+          return { type: "not_found" as const };
+        }
+
+        if (targetMembership.role === "OWNER") {
+          const ownerCount = await tx.membership.count({
+            where: {
+              organizationId: workspaceAuth.organizationId,
+              role: "OWNER",
+            },
+          });
+
+          if (ownerCount <= 1) {
+            return { type: "final_owner" as const };
+          }
+        }
+
+        const updatedMembership = await tx.membership.update({
+          where: {
+            userId_organizationId: {
+              userId: parsedMemberUserId.data,
+              organizationId: workspaceAuth.organizationId,
+            },
+          },
+          data: {
+            role: parsedInput.data.role,
+          },
+          select: {
+            role: true,
+            createdAt: true,
+          },
+        });
+
+        await tx.auditEvent.create({
+          data: {
+            organizationId: workspaceAuth.organizationId,
+            actorUserId: auth.userId,
+            action: "MEMBER_ROLE_CHANGED",
+            targetType: "Membership",
+            targetId: parsedMemberUserId.data,
+            metadata: {
+              previousRole: targetMembership.role,
+              newRole: updatedMembership.role,
+            },
+          },
+        });
+
+        return {
+          type: "updated" as const,
+          membership: {
+            userId: targetMembership.user.id,
+            email: targetMembership.user.email,
+            displayName: targetMembership.user.displayName,
+            role: updatedMembership.role,
+            createdAt: updatedMembership.createdAt,
+          },
+        };
+      });
+
+      if (result.type === "not_found") {
+        return rejectMembershipNotFound(res);
+      }
+
+      if (result.type === "final_owner") {
+        return rejectFinalOwnerRoleChange(res);
+      }
+
+      return res.status(200).json({
+        membership: result.membership,
+      });
+    } catch (error) {
       return next(error);
     }
   },
