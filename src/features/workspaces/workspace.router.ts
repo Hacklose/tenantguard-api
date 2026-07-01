@@ -2,7 +2,9 @@ import { Router, type Response } from "express";
 
 import { prisma } from "../../lib/prisma.js";
 import { requireAuth } from "../auth/require-auth.js";
+import { createMembershipInputSchema } from "./membership.schema.js";
 import { requireWorkspaceMembership } from "./require-workspace-membership.js";
+import { requireWorkspaceRole } from "./require-workspace-role.js";
 import { createWorkspaceInputSchema } from "./workspace.schema.js";
 
 export const workspaceRouter = Router();
@@ -173,6 +175,103 @@ workspaceRouter.get(
         })),
       });
     } catch (error) {
+      return next(error);
+    }
+  },
+);
+
+workspaceRouter.post(
+  "/:workspaceSlug/memberships",
+  requireAuth,
+  requireWorkspaceMembership,
+  requireWorkspaceRole("OWNER"),
+  async (req, res, next) => {
+    const workspaceAuth = req.workspaceAuth;
+
+    if (!workspaceAuth) {
+      return next(
+        new Error("Workspace authorization context is missing."),
+      );
+    }
+
+    const parsedInput = createMembershipInputSchema.safeParse(req.body);
+
+    if (!parsedInput.success) {
+      return res.status(422).json({
+        error: "Invalid membership data",
+      });
+    }
+
+    try {
+      const createdMembership = await prisma.$transaction(async (tx) => {
+        const invitedUser = await tx.user.findUnique({
+          where: {
+            email: parsedInput.data.email,
+          },
+          select: {
+            id: true,
+            email: true,
+            displayName: true,
+          },
+        });
+
+        if (!invitedUser) {
+          return null;
+        }
+
+        const membership = await tx.membership.create({
+          data: {
+            userId: invitedUser.id,
+            organizationId: workspaceAuth.organizationId,
+            role: parsedInput.data.role,
+          },
+          select: {
+            role: true,
+            createdAt: true,
+          },
+        });
+
+        await tx.auditEvent.create({
+          data: {
+            organizationId: workspaceAuth.organizationId,
+            actorUserId: req.auth!.userId,
+            action: "MEMBER_ADDED",
+            targetType: "Membership",
+            targetId: invitedUser.id,
+            metadata: {
+              role: membership.role,
+            },
+          },
+        });
+
+        return {
+          invitedUser,
+          membership,
+        };
+      });
+
+      if (!createdMembership) {
+        return res.status(404).json({
+          error: "User not found",
+        });
+      }
+
+      return res.status(201).json({
+        membership: {
+          userId: createdMembership.invitedUser.id,
+          email: createdMembership.invitedUser.email,
+          displayName: createdMembership.invitedUser.displayName,
+          role: createdMembership.membership.role,
+          createdAt: createdMembership.membership.createdAt,
+        },
+      });
+    } catch (error) {
+      if (isUniqueConstraintError(error)) {
+        return res.status(409).json({
+          error: "User is already a workspace member",
+        });
+      }
+
       return next(error);
     }
   },
