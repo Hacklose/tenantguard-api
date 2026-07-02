@@ -1,0 +1,64 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  *,
+  *::before,
+  *::after {
+    border-color: theme("colors.surface.700");
+  }
+
+  body {
+    @apply bg-surface-950 text-slate-100 antialiased;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+
+  /* Custom scrollbar */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: theme("colors.surface.600");
+    border-radius: 3px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: theme("colors.surface.500");
+  }
+
+  /* Focus ring global */
+  :focus-visible {
+    outline: 2px solid theme("colors.brand.500");
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+}
+
+@layer components {
+  .page-container {
+    @apply mx-auto max-w-6xl px-4 py-6 sm:px-6 lg:px-8;
+  }
+
+  .section-title {
+    @apply text-xl font-semibold text-slate-100;
+  }
+
+  .stat-card {
+    @apply rounded-xl border border-surface-800 bg-surface-900/80 p-5 shadow-card;
+  }
+
+  .stat-label {
+    @apply text-xs font-medium uppercase tracking-wider text-slate-500;
+  }
+
+  .stat-value {
+    @apply mt-1 text-2xl font-bold text-slate-100;
+  }
+}

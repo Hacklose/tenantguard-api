@@ -48,5 +48,16 @@ services:
       migrate:
         condition: service_completed_successfully
 
+  web:
+    build:
+      context: .
+      dockerfile: web/Dockerfile
+    environment:
+      VITE_API_TARGET: http://api:3000
+    ports:
+      - "127.0.0.1:5173:5173"
+    depends_on:
+      - api
+
 volumes:
   tenantguard_postgres_data:
