@@ -72,10 +72,7 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
 }
 
 function WorkspaceContextBridge({ children }: { children: React.ReactNode }) {
-  const [currentSlug, setCurrentSlug] = useState<string | null>(() => {
-    // Persist workspace selection across page refreshes (UX only, not security)
-    return sessionStorage.getItem("tg-workspace-slug");
-  });
+  const [currentSlug, setCurrentSlug] = useState<string | null>(null);
 
   const {
     data: workspaces = [],
@@ -85,15 +82,6 @@ function WorkspaceContextBridge({ children }: { children: React.ReactNode }) {
     queryFn: fetchWorkspaces,
     staleTime: 60 * 1000,
   });
-
-  // Sync workspace slug to sessionStorage for refresh persistence
-  useEffect(() => {
-    if (currentSlug) {
-      sessionStorage.setItem("tg-workspace-slug", currentSlug);
-    } else {
-      sessionStorage.removeItem("tg-workspace-slug");
-    }
-  }, [currentSlug]);
 
   if (isLoading) {
     return (
@@ -122,20 +110,30 @@ function WorkspaceContextBridge({ children }: { children: React.ReactNode }) {
 function WorkspaceSlugSync() {
   const { workspaceSlug } = useParams<{ workspaceSlug: string }>();
   const { setCurrentWorkspaceSlug, currentWorkspace } = useWorkspace();
+  const [slugResolved, setSlugResolved] = useState(false);
 
   useEffect(() => {
     if (workspaceSlug) {
       setCurrentWorkspaceSlug(workspaceSlug);
+    } else {
+      setCurrentWorkspaceSlug(null);
     }
+    setSlugResolved(true);
+    return () => setSlugResolved(false);
   }, [workspaceSlug, setCurrentWorkspaceSlug]);
 
-  // Wait until the workspace is resolved before rendering children
-  if (workspaceSlug && !currentWorkspace) {
+  // Brief tick while slug syncs from URL into context (before effect fires)
+  if (workspaceSlug && !slugResolved) {
     return (
       <div className="flex h-full items-center justify-center">
         <Spinner size="lg" />
       </div>
     );
+  }
+
+  // Slug resolved but no matching workspace — redirect to workspace list
+  if (workspaceSlug && !currentWorkspace) {
+    return <Navigate to="/app/workspaces" replace />;
   }
 
   return <Outlet />;
