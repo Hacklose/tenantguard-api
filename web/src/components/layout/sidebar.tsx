@@ -20,9 +20,13 @@ interface SidebarItem {
 
 interface SidebarProps {
   onLogout: () => void;
+  logoutPending: boolean;
 }
 
-function Sidebar({ onLogout }: SidebarProps) {
+function Sidebar({
+  onLogout,
+  logoutPending,
+}: SidebarProps) {
   const { currentWorkspace } = useWorkspace();
 
   const navItems: SidebarItem[] = [
@@ -95,11 +99,15 @@ function Sidebar({ onLogout }: SidebarProps) {
       {/* Logout */}
       <div className="border-t border-surface-800 px-3 py-3">
         <button
+          type="button"
           onClick={onLogout}
-          className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-slate-500 transition-colors duration-150 hover:text-red-400 hover:bg-red-500/10 cursor-pointer"
+          disabled={logoutPending}
+          className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-slate-500 transition-colors duration-150 hover:text-red-400 hover:bg-red-500/10 cursor-pointer disabled:cursor-not-allowed disabled:opacity-60"
         >
           <LogOut className="h-4.5 w-4.5 shrink-0" />
-          <span>Logout</span>
+          <span>
+            {logoutPending ? "Signing out..." : "Logout"}
+          </span>
         </button>
       </div>
     </aside>
@@ -110,10 +118,12 @@ function SidebarMobile({
   open,
   onClose,
   onLogout,
+  logoutPending,
 }: {
   open: boolean;
   onClose: () => void;
   onLogout: () => void;
+  logoutPending: boolean;
 }) {
   if (!open) return null;
 
@@ -125,7 +135,10 @@ function SidebarMobile({
         aria-hidden="true"
       />
       <div className="fixed inset-y-0 left-0 z-50 w-60 lg:hidden animate-slide-up">
-        <Sidebar onLogout={onLogout} />
+        <Sidebar
+          onLogout={onLogout}
+          logoutPending={logoutPending}
+        />
       </div>
     </>
   );
