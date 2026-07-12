@@ -15,7 +15,7 @@ import { Spinner } from "../components/ui/spinner";
 import { RoleBadge } from "../components/role-badge";
 import { EmptyState } from "../components/empty-state";
 import { ErrorState } from "../components/error-state";
-import { getErrorMessage } from "../hooks/use-error";
+import { getErrorMessage, useHandleApiError } from "../hooks/use-error";
 
 const createSchema = z.object({
   name: z.string().min(1, "Workspace name is required").max(120),
@@ -34,6 +34,7 @@ type CreateForm = z.infer<typeof createSchema>;
 function WorkspacesPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const handleApiError = useHandleApiError();
   const { setCurrentWorkspaceSlug } = useWorkspace();
   const [createOpen, setCreateOpen] = useState(false);
   const [serverError, setServerError] = useState<string | null>(null);
@@ -59,6 +60,7 @@ function WorkspacesPage() {
       navigate(`/app/workspaces/${newWorkspace.slug}/projects`);
     },
     onError: (err) => {
+      handleApiError(err);
       setServerError(getErrorMessage(err));
     },
   });
