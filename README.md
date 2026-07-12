@@ -23,38 +23,66 @@ HTTP API: workspace
 Database / Prisma: Organization
 ```
 
-## Быстрый старт
+## Локальная разработка
 
-### 1. Создать .env (один раз, обязательно)
+### 1. Подготовить environment
 
 ```bash
 cp .env.example .env
 ```
 
-### 2. Запустить
+Проверь значения PostgreSQL в `.env`.
+
+### 2. Запустить PostgreSQL и API
 
 ```bash
-sudo docker compose up
+docker compose up --build -d
 ```
 
-> Если порт 5432 занят локальным PostgreSQL — сначала `sudo systemctl stop postgresql`.
-
-Готово:
-
-| Сервис | URL |
-|--------|-----|
-| Фронтенд | http://localhost:5173 |
-| API | http://localhost:3000 |
-
-### 3. Проверка
+Проверка:
 
 ```bash
-curl -s http://localhost:3000/health
-# → {"status":"ok"}
-
-curl -s http://localhost:5173/
-# → HTML страница (HTTP 200)
+docker compose ps
+curl --fail --show-error http://127.0.0.1:3000/health
 ```
+
+Local Compose запускает API с:
+
+```text
+NODE_ENV=development
+LAB_MODE=false
+```
+
+Это необходимо для предсказуемой работы HttpOnly session cookie через локальный HTTP.
+
+### 3. Запустить frontend
+
+```bash
+npm --prefix web ci
+npm --prefix web run dev
+```
+
+Открыть:
+
+```text
+http://localhost:5173
+```
+
+Vite проксирует `/auth`, `/me` и `/workspaces` на локальный API.
+
+### Важно
+
+Не хранить session token в:
+
+```text
+localStorage
+sessionStorage
+JavaScript state
+```
+
+Raw session token существует только в HttpOnly cookie.
+
+`compose.yaml` предназначен для локальной разработки. Production deployment должен использовать HTTPS и `NODE_ENV=production`.
 
 ---
 
@@ -175,18 +203,6 @@ curl -s http://localhost:5173/
 | Workspace slug из URL | Не из тела запроса и не из localStorage |
 
 ---
-
-## Local development: cookie/HTTPS
-
-Backend в `NODE_ENV=development` (`.env`) ставит `secure: false` на cookie — сессия работает через HTTP localhost.
-
-При `NODE_ENV=production` (compose.yaml) cookie имеет `Secure` флаг и **не будет работать** в браузере через HTTP. Для локальной разработки используй:
-
-```bash
-NODE_ENV=development npm run dev
-```
-
-Никогда не выставляй `secure: false` в production.
 
 ---
 
