@@ -1,21 +1,11 @@
 import { useState } from "react";
-import { useParams, Link } from "react-router-dom";
+import { useParams, Link, useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import {
-  Plus,
-  FolderKanban,
-  Pencil,
-  Trash2,
-} from "lucide-react";
-import {
-  fetchProjects,
-  createProject,
-  updateProject,
-  deleteProject,
-} from "../api/projects";
+import { Pencil, Trash2, ChevronRight } from "lucide-react";
+import { fetchProject, updateProject, deleteProject } from "../api/projects";
 import { useWorkspace } from "../hooks/use-workspace";
 import { canManageProjects } from "../types";
 import { Button } from "../components/ui/button";
@@ -23,31 +13,28 @@ import { Input } from "../components/ui/input";
 import { Modal } from "../components/ui/modal";
 import { Card } from "../components/ui/card";
 import { Spinner } from "../components/ui/spinner";
-import { EmptyState } from "../components/empty-state";
 import { ErrorState } from "../components/error-state";
+import { NotFoundPage } from "./not-found-page";
 import { getErrorMessage, useHandleApiError } from "../hooks/use-error";
-
-const createSchema = z.object({
-  name: z.string().min(1, "Project name is required").max(160),
-  description: z.string().max(2000).optional(),
-});
 
 const editSchema = z.object({
   name: z.string().min(1, "Project name is required").max(160),
   description: z.string().max(2000).nullable().optional(),
 });
 
-type CreateForm = z.infer<typeof createSchema>;
 type EditForm = z.infer<typeof editSchema>;
 
-function ProjectsPage() {
-  const { workspaceSlug } = useParams<{ workspaceSlug: string }>();
+function ProjectDetailPage() {
+  const { workspaceSlug, projectId } = useParams<{
+    workspaceSlug: string;
+    projectId: string;
+  }>();
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const handleApiError = useHandleApiError();
   const { currentRole } = useWorkspace();
   const canManage = currentRole ? canManageProjects(currentRole) : false;
 
-  const [createOpen, setCreateOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<{
     id: string;
     name: string;
@@ -60,44 +47,29 @@ function ProjectsPage() {
   const [serverError, setServerError] = useState<string | null>(null);
 
   const slug = workspaceSlug ?? "";
+  const id = projectId ?? "";
 
   const {
-    data: projects = [],
+    data: project,
     isLoading,
     isError,
     error,
     refetch,
   } = useQuery({
-    queryKey: ["projects", slug],
-    queryFn: () => fetchProjects(slug),
-    enabled: !!slug,
-  });
-
-  const createMutation = useMutation({
-    mutationFn: (data: CreateForm) =>
-      createProject(slug, {
-        name: data.name,
-        description: data.description || undefined,
-      }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["projects", slug] });
-      setCreateOpen(false);
-      setServerError(null);
-    },
-    onError: (err) => {
-      handleApiError(err);
-      setServerError(getErrorMessage(err));
-    },
+    queryKey: ["project", slug, id],
+    queryFn: () => fetchProject(slug, id),
+    enabled: !!slug && !!id,
   });
 
   const editMutation = useMutation({
-    mutationFn: ({ id, ...data }: EditForm & { id: string }) => {
+    mutationFn: ({ id: _, ...data }: EditForm & { id: string }) => {
       const body: { name?: string; description?: string | null } = {};
       if (data.name !== undefined) body.name = data.name;
       if (data.description !== undefined) body.description = data.description;
       return updateProject(slug, id, body);
     },
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["project", slug, id] });
       queryClient.invalidateQueries({ queryKey: ["projects", slug] });
       setEditTarget(null);
       setServerError(null);
@@ -113,15 +85,12 @@ function ProjectsPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["projects", slug] });
       setDeleteTarget(null);
+      navigate(`/app/workspaces/${slug}/projects`, { replace: true });
     },
     onError: (err) => {
       handleApiError(err);
       setServerError(getErrorMessage(err));
     },
-  });
-
-  const createForm = useForm<CreateForm>({
-    resolver: zodResolver(createSchema),
   });
 
   const editForm = useForm<EditForm>({
@@ -139,12 +108,6 @@ function ProjectsPage() {
     });
     setServerError(null);
     setEditTarget(project);
-  }
-
-  function openCreate() {
-    createForm.reset();
-    setServerError(null);
-    setCreateOpen(true);
   }
 
   if (isLoading) {
@@ -166,145 +129,67 @@ function ProjectsPage() {
     );
   }
 
+  if (!project) {
+    return <NotFoundPage />;
+  }
+
   return (
     <div className="page-container space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-100">Projects</h1>
-          <p className="mt-1 text-sm text-slate-400">
-            Manage projects in this workspace
-          </p>
-        </div>
-        {canManage && (
-          <Button onClick={openCreate} size="sm">
-            <Plus className="h-4 w-4" />
-            New project
-          </Button>
-        )}
-      </div>
-
-      {projects.length === 0 ? (
-        <EmptyState
-          icon={<FolderKanban className="h-10 w-10" />}
-          title="No projects yet"
-          description="Create your first project to get started."
-          action={
-            canManage ? (
-              <Button onClick={openCreate}>
-                <Plus className="h-4 w-4" />
-                Create project
-              </Button>
-            ) : undefined
-          }
-        />
-      ) : (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {projects.map((project) => (
-            <Link
-              key={project.id}
-              to={`/app/workspaces/${slug}/projects/${project.id}`}
-              className="block"
-            >
-              <Card hover>
-                <div className="flex items-start justify-between">
-                  <div className="flex-1 min-w-0">
-                    <h3 className="font-semibold text-slate-100 truncate">
-                      {project.name}
-                    </h3>
-                    {project.description && (
-                      <p className="mt-1 text-xs text-slate-500 line-clamp-2">
-                        {project.description}
-                      </p>
-                    )}
-                  </div>
-                  {canManage && (
-                    <div
-                      className="ml-2 flex shrink-0 gap-0.5"
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-7 w-7 p-0"
-                        onClick={() => openEdit(project)}
-                        aria-label="Edit project"
-                      >
-                        <Pencil className="h-3.5 w-3.5" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-7 w-7 p-0"
-                        onClick={() =>
-                          setDeleteTarget({
-                            id: project.id,
-                            name: project.name,
-                          })
-                        }
-                        aria-label="Delete project"
-                      >
-                        <Trash2 className="h-3.5 w-3.5 text-red-400" />
-                      </Button>
-                    </div>
-                  )}
-                </div>
-                <div className="mt-3 text-xs text-slate-600">
-                  Updated {new Date(project.updatedAt).toLocaleDateString()}
-                </div>
-              </Card>
-            </Link>
-          ))}
-        </div>
-      )}
-
-      {/* Create Modal */}
-      <Modal
-        open={createOpen}
-        onClose={() => setCreateOpen(false)}
-        title="Create project"
+      {/* Back navigation */}
+      <Link
+        to={`/app/workspaces/${slug}/projects`}
+        className="flex items-center gap-1 text-sm text-brand-400 hover:text-brand-300 transition-colors w-fit"
       >
-        <form
-          onSubmit={createForm.handleSubmit((data) =>
-            createMutation.mutate(data),
-          )}
-          className="space-y-4"
-        >
-          <Input
-            label="Project name"
-            placeholder="My project"
-            error={createForm.formState.errors.name?.message}
-            {...createForm.register("name")}
-          />
-          <Input
-            label="Description (optional)"
-            placeholder="Brief description of the project"
-            error={createForm.formState.errors.description?.message}
-            {...createForm.register("description")}
-          />
+        <ChevronRight className="h-4 w-4 rotate-180" />
+        Back to projects
+      </Link>
 
-          {serverError && (
-            <div
-              className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-400"
-              role="alert"
-            >
-              {serverError}
+      {/* Project detail */}
+      <Card>
+        <div className="flex items-start justify-between">
+          <div>
+            <h2 className="text-xl font-bold text-slate-100">
+              {project.name}
+            </h2>
+            {project.description && (
+              <p className="mt-2 text-sm text-slate-400">
+                {project.description}
+              </p>
+            )}
+          </div>
+          {canManage && (
+            <div className="flex gap-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => openEdit(project)}
+              >
+                <Pencil className="h-4 w-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() =>
+                  setDeleteTarget({
+                    id: project.id,
+                    name: project.name,
+                  })
+                }
+              >
+                <Trash2 className="h-4 w-4 text-red-400" />
+              </Button>
             </div>
           )}
-
-          <div className="flex justify-end gap-3 pt-2">
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={() => setCreateOpen(false)}
-            >
-              Cancel
-            </Button>
-            <Button type="submit" loading={createMutation.isPending}>
-              Create
-            </Button>
-          </div>
-        </form>
-      </Modal>
+        </div>
+        <div className="mt-4 flex gap-4 text-xs text-slate-500">
+          <span>
+            Created: {new Date(project.createdAt).toLocaleDateString()}
+          </span>
+          <span>
+            Updated: {new Date(project.updatedAt).toLocaleDateString()}
+          </span>
+        </div>
+      </Card>
 
       {/* Edit Modal */}
       <Modal
@@ -410,4 +295,4 @@ function ProjectsPage() {
   );
 }
 
-export { ProjectsPage };
+export { ProjectDetailPage };

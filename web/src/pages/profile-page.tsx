@@ -12,7 +12,7 @@ import { Input } from "../components/ui/input";
 import { Card } from "../components/ui/card";
 import { Spinner } from "../components/ui/spinner";
 import { ErrorState } from "../components/error-state";
-import { getErrorMessage } from "../hooks/use-error";
+import { getErrorMessage, useHandleApiError } from "../hooks/use-error";
 import { formatDateTime } from "../lib/utils";
 
 const editSchema = z.object({
@@ -24,6 +24,7 @@ type EditForm = z.infer<typeof editSchema>;
 function ProfilePage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const handleApiError = useHandleApiError();
   const [isEditing, setIsEditing] = useState(false);
   const [serverError, setServerError] = useState<string | null>(null);
 
@@ -46,6 +47,7 @@ function ProfilePage() {
       setServerError(null);
     },
     onError: (err) => {
+      handleApiError(err);
       setServerError(getErrorMessage(err));
     },
   });

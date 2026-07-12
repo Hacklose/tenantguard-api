@@ -19,6 +19,7 @@ import { RegisterPage } from "./pages/register-page";
 import { DashboardPage } from "./pages/dashboard-page";
 import { WorkspacesPage } from "./pages/workspaces-page";
 import { ProjectsPage } from "./pages/projects-page";
+import { ProjectDetailPage } from "./pages/project-detail-page";
 import { MembersPage } from "./pages/members-page";
 import { ProfilePage } from "./pages/profile-page";
 import { NotFoundPage } from "./pages/not-found-page";
@@ -178,6 +179,10 @@ function AppRoutes() {
           <Route
             path="/app/workspaces/:workspaceSlug/projects"
             element={<ProjectsPage />}
+          />
+          <Route
+            path="/app/workspaces/:workspaceSlug/projects/:projectId"
+            element={<ProjectDetailPage />}
           />
           <Route
             path="/app/workspaces/:workspaceSlug/members"

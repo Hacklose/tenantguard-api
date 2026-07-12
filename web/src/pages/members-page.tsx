@@ -20,7 +20,7 @@ import { Spinner } from "../components/ui/spinner";
 import { RoleBadge } from "../components/role-badge";
 import { EmptyState } from "../components/empty-state";
 import { ErrorState } from "../components/error-state";
-import { getErrorMessage } from "../hooks/use-error";
+import { getErrorMessage, useHandleApiError } from "../hooks/use-error";
 import { formatDate } from "../lib/utils";
 
 const addSchema = z.object({
@@ -37,6 +37,7 @@ type AddForm = z.infer<typeof addSchema>;
 function MembersPage() {
   const { workspaceSlug } = useParams<{ workspaceSlug: string }>();
   const queryClient = useQueryClient();
+  const handleApiError = useHandleApiError();
   const { currentRole } = useWorkspace();
   const isOwner = currentRole === "OWNER";
 
@@ -71,7 +72,10 @@ function MembersPage() {
       setAddOpen(false);
       setServerError(null);
     },
-    onError: (err) => setServerError(getErrorMessage(err)),
+    onError: (err) => {
+      handleApiError(err);
+      setServerError(getErrorMessage(err));
+    },
   });
 
   const roleMutation = useMutation({
@@ -87,7 +91,10 @@ function MembersPage() {
       setRoleTarget(null);
       setServerError(null);
     },
-    onError: (err) => setServerError(getErrorMessage(err)),
+    onError: (err) => {
+      handleApiError(err);
+      setServerError(getErrorMessage(err));
+    },
   });
 
   const removeMutation = useMutation({
@@ -96,7 +103,10 @@ function MembersPage() {
       queryClient.invalidateQueries({ queryKey: ["memberships", slug] });
       setRemoveTarget(null);
     },
-    onError: (err) => setServerError(getErrorMessage(err)),
+    onError: (err) => {
+      handleApiError(err);
+      setServerError(getErrorMessage(err));
+    },
   });
 
   const addForm = useForm<AddForm>({
