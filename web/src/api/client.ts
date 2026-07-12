@@ -1,3 +1,5 @@
+const AUTH_REQUIRED_EVENT = "tenantguard:auth-required";
+
 class ApiClientError extends Error {
   public readonly status: number;
   public readonly apiMessage: string;
@@ -43,6 +45,8 @@ function getDefaultErrorMessage(status: number): string {
       return "Insufficient permissions.";
     case 404:
       return "Resource not found or unavailable.";
+    case 409:
+      return "The requested operation conflicts with existing data.";
     case 422:
       return "Invalid data provided.";
     case 429:
@@ -57,7 +61,10 @@ interface RequestOptions {
   body?: unknown;
 }
 
-async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+async function request<T>(
+  path: string,
+  options: RequestOptions = {},
+): Promise<T> {
   const { method = "GET", body } = options;
 
   const headers: Record<string, string> = {};
@@ -73,8 +80,23 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
 
+  /*
+   * Existing mutation handlers already process their own errors.
+   * This event guarantees that expired sessions from GET queries are
+   * also handled at the application level.
+   */
+  if (response.status === 401 && method === "GET") {
+    window.dispatchEvent(new Event(AUTH_REQUIRED_EVENT));
+  }
+
   return handleResponse<T>(response);
 }
 
-export { ApiClientError, request, handleResponse };
+export {
+  AUTH_REQUIRED_EVENT,
+  ApiClientError,
+  request,
+  handleResponse,
+};
+
 export type { RequestOptions };

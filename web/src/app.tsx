@@ -11,6 +11,7 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useQuery } from "@tanstack/react-query";
 import { AuthProvider, useAuth } from "./hooks/use-auth";
+import { useAuthExpiryRedirect } from "./hooks/use-auth-expiry-redirect";
 import { WorkspaceProvider, useWorkspace } from "./hooks/use-workspace";
 import { fetchWorkspaces } from "./api/workspaces";
 import { AppShell } from "./components/layout/app-shell";
@@ -140,6 +141,12 @@ function WorkspaceSlugSync() {
   return <Outlet />;
 }
 
+function AuthExpiryRedirectBridge() {
+  useAuthExpiryRedirect();
+
+  return null;
+}
+
 function AppRoutes() {
   return (
     <Routes>
@@ -206,6 +213,8 @@ function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
+        <AuthExpiryRedirectBridge />
+
         <AuthProvider>
           <AppRoutes />
         </AuthProvider>
