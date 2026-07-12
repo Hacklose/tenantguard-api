@@ -1,45 +1,40 @@
 import { useState } from "react";
-import { Outlet, useNavigate } from "react-router-dom";
-import { useQueryClient } from "@tanstack/react-query";
+import { Outlet } from "react-router-dom";
 import { Menu } from "lucide-react";
 import { Sidebar, SidebarMobile } from "./sidebar";
 import { WorkspaceSwitcher } from "../workspace-switcher";
 import { RoleBadge } from "../role-badge";
 import { useWorkspace } from "../../hooks/use-workspace";
-import { logout } from "../../api/auth";
+import { useLogout } from "../../hooks/use-logout";
 import { cn } from "../../lib/utils";
 
 function AppShell() {
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const { currentRole } = useWorkspace();
-  const navigate = useNavigate();
-  const queryClient = useQueryClient();
 
-  async function handleLogout() {
-    try {
-      await logout();
-    } catch {
-      // Even if the logout request fails, clear local state
-    } finally {
-      queryClient.clear();
-      navigate("/login", {
-        state: { message: "You have been signed out." },
-      });
-    }
-  }
+  const {
+    signOut,
+    isSigningOut,
+    logoutError,
+    clearLogoutError,
+  } = useLogout();
 
   return (
     <div className="flex h-screen overflow-hidden">
       {/* Desktop sidebar */}
       <div className="hidden lg:block">
-        <Sidebar onLogout={handleLogout} />
+        <Sidebar
+          onLogout={signOut}
+          logoutPending={isSigningOut}
+        />
       </div>
 
       {/* Mobile sidebar */}
       <SidebarMobile
         open={mobileSidebarOpen}
         onClose={() => setMobileSidebarOpen(false)}
-        onLogout={handleLogout}
+        onLogout={signOut}
+        logoutPending={isSigningOut}
       />
 
       {/* Main area */}
@@ -66,6 +61,24 @@ function AppShell() {
             )}
           </div>
         </header>
+
+        {/* Logout error banner */}
+        {logoutError && (
+          <div
+            role="alert"
+            className="flex items-start justify-between gap-4 border-b border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300 lg:px-6"
+          >
+            <span>{logoutError}</span>
+
+            <button
+              type="button"
+              onClick={clearLogoutError}
+              className="shrink-0 text-xs font-medium text-red-300 underline hover:text-red-200"
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
 
         {/* Page content */}
         <main

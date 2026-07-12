@@ -1,12 +1,11 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { UserCircle, Mail, Calendar, Pencil, LogOut } from "lucide-react";
 import { fetchMe, updateProfile } from "../api/profile";
-import { logout } from "../api/auth";
+import { useLogout } from "../hooks/use-logout";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Card } from "../components/ui/card";
@@ -22,11 +21,17 @@ const editSchema = z.object({
 type EditForm = z.infer<typeof editSchema>;
 
 function ProfilePage() {
-  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const handleApiError = useHandleApiError();
   const [isEditing, setIsEditing] = useState(false);
   const [serverError, setServerError] = useState<string | null>(null);
+
+  const {
+    signOut,
+    isSigningOut,
+    logoutError,
+    clearLogoutError,
+  } = useLogout();
 
   const {
     data: user,
@@ -60,19 +65,6 @@ function ProfilePage() {
   } = useForm<EditForm>({
     resolver: zodResolver(editSchema),
   });
-
-  async function handleLogout() {
-    try {
-      await logout();
-    } catch {
-      // Continue with local cleanup
-    } finally {
-      queryClient.clear();
-      navigate("/login", {
-        state: { message: "You have been signed out." },
-      });
-    }
-  }
 
   function startEditing() {
     if (!user) return;
@@ -206,6 +198,25 @@ function ProfilePage() {
 
       {/* Logout */}
       <Card className="border-red-500/20 bg-red-500/5">
+        {logoutError && (
+          <div
+            role="alert"
+            className="mb-4 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300"
+          >
+            <div className="flex items-start justify-between gap-4">
+              <span>{logoutError}</span>
+
+              <button
+                type="button"
+                onClick={clearLogoutError}
+                className="shrink-0 text-xs font-medium underline"
+              >
+                Dismiss
+              </button>
+            </div>
+          </div>
+        )}
+
         <div className="flex items-center justify-between">
           <div>
             <h3 className="text-sm font-semibold text-slate-200">Sign out</h3>
@@ -213,7 +224,12 @@ function ProfilePage() {
               End your current session
             </p>
           </div>
-          <Button variant="danger" size="sm" onClick={handleLogout}>
+          <Button
+            variant="danger"
+            size="sm"
+            onClick={signOut}
+            loading={isSigningOut}
+          >
             <LogOut className="h-4 w-4" />
             Logout
           </Button>
