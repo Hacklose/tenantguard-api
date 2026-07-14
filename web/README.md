@@ -93,6 +93,32 @@ The only client-side persistence is the **selected workspace slug** in `sessionS
 | Create project | `/workspaces/:slug/projects` | POST |
 | Update project | `/workspaces/:slug/projects/:id` | PATCH |
 | Delete project | `/workspaces/:slug/projects/:id` | DELETE |
+| Submit project for review | `/workspaces/:slug/projects/:id/submit-review` | POST |
+| Return project to draft | `/workspaces/:slug/projects/:id/reject-review` | POST |
+| Publish project | `/workspaces/:slug/projects/:id/publish` | POST |
+
+## Project Workflow State Machine
+
+```
+DRAFT ──submit-review──▶ REVIEW ──publish──▶ PUBLISHED
+  ▲                         │
+  └────reject-review────────┘
+```
+
+**State transitions:**
+
+| From | Action | To | Allowed roles |
+|------|--------|----|---------------|
+| DRAFT | Submit for review | REVIEW | OWNER, ADMIN |
+| REVIEW | Return to draft | DRAFT | OWNER |
+| REVIEW | Publish | PUBLISHED | OWNER |
+
+**Mutation rules:**
+- DRAFT: PATCH / DELETE allowed for OWNER, ADMIN
+- REVIEW: PATCH / DELETE blocked (409)
+- PUBLISHED: PATCH / DELETE blocked (409); fully read-only
+
+> **Role-based and status-based button hiding is UX only.** The backend is the sole security authority — it validates role, status, and tenant membership on every request.
 
 ## Backend Features Without UI
 
@@ -139,6 +165,7 @@ web/
 │   ├── components/
 │   │   ├── layout/    # AppShell, Sidebar
 │   │   ├── ui/        # Button, Input, Card, Modal, Badge, Spinner
+│   │   ├── project-status-badge.tsx
 │   │   ├── role-badge.tsx
 │   │   ├── workspace-switcher.tsx
 │   │   ├── empty-state.tsx

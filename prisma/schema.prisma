@@ -13,6 +13,12 @@ enum MembershipRole {
   MEMBER
 }
 
+enum ProjectStatus {
+  DRAFT
+  REVIEW
+  PUBLISHED
+}
+
 enum AuditAction {
   ORGANIZATION_CREATED
   MEMBER_ADDED
@@ -23,6 +29,9 @@ enum AuditAction {
   PROJECT_DELETED
   SESSION_CREATED
   SESSION_REVOKED
+  PROJECT_REVIEW_SUBMITTED
+  PROJECT_REVIEW_REJECTED
+  PROJECT_PUBLISHED
 }
 
 model User {
@@ -32,10 +41,10 @@ model User {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  memberships Membership[]
-  sessions    Session[]
-  auditEvents AuditEvent[] @relation("AuditActor")
-  passwordHash String @db.VarChar(255)
+  memberships  Membership[]
+  sessions     Session[]
+  auditEvents  AuditEvent[] @relation("AuditActor")
+  passwordHash String       @db.VarChar(255)
 }
 
 model Organization {
@@ -64,22 +73,26 @@ model Membership {
 }
 
 model Project {
-  id             String   @id @default(uuid()) @db.Uuid
-  organizationId String   @db.Uuid
-  name           String
-  description    String?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  id                String        @id @default(uuid()) @db.Uuid
+  organizationId    String        @db.Uuid
+  name              String
+  description       String?
+  status            ProjectStatus @default(DRAFT)
+  reviewRequestedAt DateTime?
+  publishedAt       DateTime?
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
   @@index([organizationId])
+  @@index([organizationId, status])
 }
 
 model Session {
   id        String    @id @default(uuid()) @db.Uuid
   userId    String    @db.Uuid
-  tokenHash String @unique @db.Char(64)
+  tokenHash String    @unique @db.Char(64)
   expiresAt DateTime
   revokedAt DateTime?
   createdAt DateTime  @default(now())

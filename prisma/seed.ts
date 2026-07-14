@@ -1,10 +1,13 @@
 import "dotenv/config";
-import argon2 from "argon2";
+
 import { PrismaPg } from "@prisma/adapter-pg";
+import argon2 from "argon2";
+
 import {
   AuditAction,
   MembershipRole,
   PrismaClient,
+  ProjectStatus,
 } from "../src/generated/prisma/client.js";
 
 function requiredEnv(name: string): string {
@@ -18,7 +21,9 @@ function requiredEnv(name: string): string {
 }
 
 const connectionString = requiredEnv("DATABASE_URL");
-const demoAccountPassword = requiredEnv("DEMO_ACCOUNT_PASSWORD");
+const demoAccountPassword = requiredEnv(
+  "DEMO_ACCOUNT_PASSWORD",
+);
 
 if (demoAccountPassword.length < 12) {
   throw new Error(
@@ -49,23 +54,47 @@ const ids = {
   carol: "cccccccc-cccc-4ccc-8ccc-ccccccccccc3",
   dave: "dddddddd-dddd-4ddd-8ddd-ddddddddddd4",
 
-  acmeCrm: "a0a00000-0000-4000-8000-000000000001",
-  acmeBilling: "a0a00000-0000-4000-8000-000000000002",
-  globexAnalytics: "b0b00000-0000-4000-8000-000000000001",
-  globexMobile: "b0b00000-0000-4000-8000-000000000002",
+  /*
+   * Используем прежние четыре UUID проектов.
+   *
+   * Благодаря этому повторный seed обновит существующие
+   * проекты, а не создаст новые дубликаты.
+   */
+  acmeDraft: "a0a00000-0000-4000-8000-000000000001",
+  acmeReview: "a0a00000-0000-4000-8000-000000000002",
+  acmePublished:
+    "b0b00000-0000-4000-8000-000000000001",
+  globexDraft:
+    "b0b00000-0000-4000-8000-000000000002",
 
-  acmeCreatedEvent: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee1",
-  globexCreatedEvent: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee2",
+  acmeCreatedEvent:
+    "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee1",
+  globexCreatedEvent:
+    "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee2",
 } as const;
 
+const reviewRequestedAt = new Date(
+  "2026-07-14T10:00:00.000Z",
+);
+
+const publishedAt = new Date(
+  "2026-07-14T12:00:00.000Z",
+);
+
 async function upsertSeedUser(user: SeedUser) {
-  // Новый hash на каждый seed-user: у каждого будет своя соль.
-  const passwordHash = await argon2.hash(demoAccountPassword, {
-    type: argon2.argon2id,
-    memoryCost: 19 * 1024,
-    timeCost: 2,
-    parallelism: 1,
-  });
+  /*
+   * Для каждого нового seed-user создаётся отдельный
+   * Argon2id hash со своей солью.
+   */
+  const passwordHash = await argon2.hash(
+    demoAccountPassword,
+    {
+      type: argon2.argon2id,
+      memoryCost: 19 * 1024,
+      timeCost: 2,
+      parallelism: 1,
+    },
+  );
 
   return prisma.user.upsert({
     where: {
@@ -73,7 +102,7 @@ async function upsertSeedUser(user: SeedUser) {
     },
 
     update: {
-      displayName: user.displayName
+      displayName: user.displayName,
     },
 
     create: {
@@ -84,6 +113,10 @@ async function upsertSeedUser(user: SeedUser) {
 }
 
 async function main() {
+  /*
+   * Organizations
+   */
+
   const acme = await prisma.organization.upsert({
     where: {
       slug: "acme",
@@ -116,6 +149,10 @@ async function main() {
     },
   });
 
+  /*
+   * Users
+   */
+
   const alice = await upsertSeedUser({
     id: ids.alice,
     email: "alice@acme.local",
@@ -139,6 +176,10 @@ async function main() {
     email: "dave@globex.local",
     displayName: "Dave Miller",
   });
+
+  /*
+   * Memberships
+   */
 
   await prisma.membership.upsert({
     where: {
@@ -235,81 +276,144 @@ async function main() {
     },
   });
 
-  await prisma.project.upsert({
-    where: {
-      id: ids.acmeCrm,
-    },
-
-    update: {
-      name: "Acme CRM",
-      description: "Customer relationship management platform",
-      organizationId: acme.id,
-    },
-
-    create: {
-      id: ids.acmeCrm,
-      name: "Acme CRM",
-      description: "Customer relationship management platform",
-      organizationId: acme.id,
-    },
-  });
+  /*
+   * Acme DRAFT project
+   *
+   * Можно редактировать, удалять и отправлять на review.
+   */
 
   await prisma.project.upsert({
     where: {
-      id: ids.acmeBilling,
+      id: ids.acmeDraft,
     },
 
     update: {
-      name: "Acme Billing",
-      description: "Internal billing service",
+      name: "Acme Draft Project",
+      description:
+        "Editable Acme project prepared for workflow testing",
       organizationId: acme.id,
+      status: ProjectStatus.DRAFT,
+      reviewRequestedAt: null,
+      publishedAt: null,
     },
 
     create: {
-      id: ids.acmeBilling,
-      name: "Acme Billing",
-      description: "Internal billing service",
+      id: ids.acmeDraft,
+      name: "Acme Draft Project",
+      description:
+        "Editable Acme project prepared for workflow testing",
       organizationId: acme.id,
+      status: ProjectStatus.DRAFT,
+      reviewRequestedAt: null,
+      publishedAt: null,
     },
   });
+
+  /*
+   * Acme REVIEW project
+   *
+   * Нельзя редактировать или удалять.
+   * OWNER может вернуть его в DRAFT или опубликовать.
+   */
 
   await prisma.project.upsert({
     where: {
-      id: ids.globexAnalytics,
+      id: ids.acmeReview,
     },
 
     update: {
-      name: "Globex Analytics",
-      description: "Analytics dashboard",
-      organizationId: globex.id,
+      name: "Acme Review Project",
+      description:
+        "Acme project waiting for owner review",
+      organizationId: acme.id,
+      status: ProjectStatus.REVIEW,
+      reviewRequestedAt,
+      publishedAt: null,
     },
 
     create: {
-      id: ids.globexAnalytics,
-      name: "Globex Analytics",
-      description: "Analytics dashboard",
-      organizationId: globex.id,
+      id: ids.acmeReview,
+      name: "Acme Review Project",
+      description:
+        "Acme project waiting for owner review",
+      organizationId: acme.id,
+      status: ProjectStatus.REVIEW,
+      reviewRequestedAt,
+      publishedAt: null,
     },
   });
+
+  /*
+   * Acme PUBLISHED project
+   *
+   * Проект уже прошёл review и опубликован.
+   * Обычные PATCH и DELETE должны быть запрещены.
+   */
 
   await prisma.project.upsert({
     where: {
-      id: ids.globexMobile,
+      id: ids.acmePublished,
     },
 
     update: {
-      name: "Globex Mobile",
-      description: "Mobile application platform",
-      organizationId: globex.id,
+      name: "Acme Published Project",
+      description:
+        "Acme project that completed the review workflow",
+      organizationId: acme.id,
+      status: ProjectStatus.PUBLISHED,
+      reviewRequestedAt,
+      publishedAt,
     },
 
     create: {
-      id: ids.globexMobile,
-      name: "Globex Mobile",
-      description: "Mobile application platform",
-      organizationId: globex.id,
+      id: ids.acmePublished,
+      name: "Acme Published Project",
+      description:
+        "Acme project that completed the review workflow",
+      organizationId: acme.id,
+      status: ProjectStatus.PUBLISHED,
+      reviewRequestedAt,
+      publishedAt,
     },
   });
+
+  /*
+   * Globex DRAFT project
+   *
+   * Используется для проверки tenant isolation:
+   * пользователи Acme не должны получать к нему доступ.
+   */
+
+  await prisma.project.upsert({
+    where: {
+      id: ids.globexDraft,
+    },
+
+    update: {
+      name: "Globex Draft Project",
+      description:
+        "Globex draft used for tenant-isolation testing",
+      organizationId: globex.id,
+      status: ProjectStatus.DRAFT,
+      reviewRequestedAt: null,
+      publishedAt: null,
+    },
+
+    create: {
+      id: ids.globexDraft,
+      name: "Globex Draft Project",
+      description:
+        "Globex draft used for tenant-isolation testing",
+      organizationId: globex.id,
+      status: ProjectStatus.DRAFT,
+      reviewRequestedAt: null,
+      publishedAt: null,
+    },
+  });
+
+  /*
+   * Initial audit events
+   */
 
   await prisma.auditEvent.upsert({
     where: {
@@ -352,7 +456,14 @@ async function main() {
   });
 
   console.log("Seed completed successfully.");
-  console.log("Created or updated: 4 users, 2 organizations, 5 memberships, 4 projects.");
+
+  console.log(
+    "Created or updated: 4 users, 2 organizations, 5 memberships, 4 projects.",
+  );
+
+  console.log(
+    "Projects: Acme DRAFT, Acme REVIEW, Acme PUBLISHED, Globex DRAFT.",
+  );
 }
 
 main()
