@@ -139,6 +139,7 @@ async function createDraftProject(
     },
   });
 }
+
 async function createReviewProject(
   organizationId: string,
   label: string,
@@ -153,6 +154,7 @@ async function createReviewProject(
     },
   });
 }
+
 describe("project publication workflow", () => {
   beforeEach(async () => {
     await deleteWorkflowTestData();
@@ -174,7 +176,6 @@ describe("project publication workflow", () => {
   it("rejects review submission by a MEMBER without side effects", async () => {
     const owner = await createTestUser("review-member-owner");
     const member = await createTestUser("review-member");
-
     const workspace = await createWorkspaceForUser(
       owner.id,
       "member-forbidden",
@@ -186,7 +187,6 @@ describe("project publication workflow", () => {
       workspace.id,
       "Member Forbidden",
     );
-
     const memberCookie = await createAuthenticatedCookie(member.id);
 
     await request(app)
@@ -223,7 +223,6 @@ describe("project publication workflow", () => {
   it("allows an ADMIN to submit a DRAFT project for review", async () => {
     const owner = await createTestUser("review-admin-owner");
     const admin = await createTestUser("review-admin");
-
     const workspace = await createWorkspaceForUser(
       owner.id,
       "admin-success",
@@ -235,7 +234,6 @@ describe("project publication workflow", () => {
       workspace.id,
       "Admin Review",
     );
-
     const adminCookie = await createAuthenticatedCookie(admin.id);
 
     const response = await request(app)
@@ -251,11 +249,9 @@ describe("project publication workflow", () => {
       status: "REVIEW",
       publishedAt: null,
     });
-
     expect(response.body.project.reviewRequestedAt).toEqual(
       expect.any(String),
     );
-
     expect(response.body.project).not.toHaveProperty("organizationId");
 
     const projectAfterRequest = await prisma.project.findUniqueOrThrow({
@@ -286,17 +282,14 @@ describe("project publication workflow", () => {
 
   it("rejects repeated review submission without additional side effects", async () => {
     const owner = await createTestUser("review-repeat-owner");
-
     const workspace = await createWorkspaceForUser(
       owner.id,
       "repeat-review",
     );
-
     const project = await createDraftProject(
       workspace.id,
       "Repeat Review",
     );
-
     const ownerCookie = await createAuthenticatedCookie(owner.id);
 
     await request(app)
@@ -306,12 +299,11 @@ describe("project publication workflow", () => {
       .set("Cookie", ownerCookie)
       .expect(200);
 
-    const projectAfterFirstRequest =
-      await prisma.project.findUniqueOrThrow({
-        where: {
-          id: project.id,
-        },
-      });
+    const firstState = await prisma.project.findUniqueOrThrow({
+      where: {
+        id: project.id,
+      },
+    });
 
     await request(app)
       .post(
@@ -323,16 +315,15 @@ describe("project publication workflow", () => {
         error: "Only draft projects can be submitted for review",
       });
 
-    const projectAfterSecondRequest =
-      await prisma.project.findUniqueOrThrow({
-        where: {
-          id: project.id,
-        },
-      });
+    const secondState = await prisma.project.findUniqueOrThrow({
+      where: {
+        id: project.id,
+      },
+    });
 
-    expect(projectAfterSecondRequest.status).toBe("REVIEW");
-    expect(projectAfterSecondRequest.reviewRequestedAt).toEqual(
-      projectAfterFirstRequest.reviewRequestedAt,
+    expect(secondState.status).toBe("REVIEW");
+    expect(secondState.reviewRequestedAt).toEqual(
+      firstState.reviewRequestedAt,
     );
 
     const auditCount = await prisma.auditEvent.count({
@@ -350,22 +341,18 @@ describe("project publication workflow", () => {
   it("returns 404 and leaves the project unchanged across tenants", async () => {
     const acmeOwner = await createTestUser("review-acme-owner");
     const globexOwner = await createTestUser("review-globex-owner");
-
     const acmeWorkspace = await createWorkspaceForUser(
       acmeOwner.id,
       "cross-tenant-acme",
     );
-
     const globexWorkspace = await createWorkspaceForUser(
       globexOwner.id,
       "cross-tenant-globex",
     );
-
     const globexProject = await createDraftProject(
       globexWorkspace.id,
       "Globex Secret",
     );
-
     const acmeCookie = await createAuthenticatedCookie(acmeOwner.id);
 
     await request(app)
@@ -397,226 +384,482 @@ describe("project publication workflow", () => {
 
     expect(auditCount).toBe(0);
   });
-it("rejects review rejection without a session", async () => {
-  await request(app)
-    .post(
-      "/workspaces/acme/projects/00000000-0000-0000-0000-000000000000/reject-review",
-    )
-    .expect(401);
-});
-it("rejects review rejection by an ADMIN without side effects", async () => {
-  const owner = await createTestUser("reject-admin-owner");
-  const admin = await createTestUser("reject-admin");
 
-  const workspace = await createWorkspaceForUser(
-    owner.id,
-    "reject-admin-forbidden",
-  );
+  it("rejects review rejection without a session", async () => {
+    await request(app)
+      .post(
+        "/workspaces/acme/projects/00000000-0000-0000-0000-000000000000/reject-review",
+      )
+      .expect(401);
+  });
 
-  await addMembership(admin.id, workspace.id, "ADMIN");
+  it("rejects review rejection by an ADMIN without side effects", async () => {
+    const owner = await createTestUser("reject-admin-owner");
+    const admin = await createTestUser("reject-admin");
+    const workspace = await createWorkspaceForUser(
+      owner.id,
+      "reject-admin-forbidden",
+    );
 
-  const project = await createReviewProject(
-    workspace.id,
-    "Admin Cannot Reject",
-  );
+    await addMembership(admin.id, workspace.id, "ADMIN");
 
-  const originalReviewRequestedAt = project.reviewRequestedAt;
-  const adminCookie = await createAuthenticatedCookie(admin.id);
+    const project = await createReviewProject(
+      workspace.id,
+      "Admin Cannot Reject",
+    );
+    const originalReviewRequestedAt = project.reviewRequestedAt;
+    const adminCookie = await createAuthenticatedCookie(admin.id);
 
-  await request(app)
-    .post(
-      `/workspaces/${workspace.slug}/projects/${project.id}/reject-review`,
-    )
-    .set("Cookie", adminCookie)
-    .expect(403)
-    .expect({
-      error: "Insufficient permissions",
-    });
+    await request(app)
+      .post(
+        `/workspaces/${workspace.slug}/projects/${project.id}/reject-review`,
+      )
+      .set("Cookie", adminCookie)
+      .expect(403)
+      .expect({
+        error: "Insufficient permissions",
+      });
 
-  const projectAfterRequest =
-    await prisma.project.findUniqueOrThrow({
+    const projectAfterRequest = await prisma.project.findUniqueOrThrow({
       where: {
         id: project.id,
       },
     });
 
-  expect(projectAfterRequest.status).toBe("REVIEW");
-  expect(projectAfterRequest.reviewRequestedAt).toEqual(
-    originalReviewRequestedAt,
-  );
+    expect(projectAfterRequest.status).toBe("REVIEW");
+    expect(projectAfterRequest.reviewRequestedAt).toEqual(
+      originalReviewRequestedAt,
+    );
 
-  const auditCount = await prisma.auditEvent.count({
-    where: {
-      organizationId: workspace.id,
-      action: "PROJECT_REVIEW_REJECTED",
-      targetId: project.id,
-    },
+    const auditCount = await prisma.auditEvent.count({
+      where: {
+        organizationId: workspace.id,
+        action: "PROJECT_REVIEW_REJECTED",
+        targetId: project.id,
+      },
+    });
+
+    expect(auditCount).toBe(0);
   });
 
-  expect(auditCount).toBe(0);
-});
-it("allows an OWNER to return a REVIEW project to DRAFT", async () => {
-  const owner = await createTestUser("reject-owner");
+  it("allows an OWNER to return a REVIEW project to DRAFT", async () => {
+    const owner = await createTestUser("reject-owner");
+    const workspace = await createWorkspaceForUser(
+      owner.id,
+      "reject-owner-success",
+    );
+    const project = await createReviewProject(
+      workspace.id,
+      "Owner Rejects Review",
+    );
+    const ownerCookie = await createAuthenticatedCookie(owner.id);
 
-  const workspace = await createWorkspaceForUser(
-    owner.id,
-    "reject-owner-success",
-  );
+    const response = await request(app)
+      .post(
+        `/workspaces/${workspace.slug}/projects/${project.id}/reject-review`,
+      )
+      .set("Cookie", ownerCookie)
+      .expect(200);
 
-  const project = await createReviewProject(
-    workspace.id,
-    "Owner Rejects Review",
-  );
+    expect(response.body.project).toMatchObject({
+      id: project.id,
+      name: project.name,
+      status: "DRAFT",
+      reviewRequestedAt: null,
+      publishedAt: null,
+    });
+    expect(response.body.project).not.toHaveProperty("organizationId");
 
-  const ownerCookie = await createAuthenticatedCookie(owner.id);
-
-  const response = await request(app)
-    .post(
-      `/workspaces/${workspace.slug}/projects/${project.id}/reject-review`,
-    )
-    .set("Cookie", ownerCookie)
-    .expect(200);
-
-  expect(response.body.project).toMatchObject({
-    id: project.id,
-    name: project.name,
-    status: "DRAFT",
-    reviewRequestedAt: null,
-    publishedAt: null,
-  });
-
-  expect(response.body.project).not.toHaveProperty("organizationId");
-
-  const projectAfterRequest =
-    await prisma.project.findUniqueOrThrow({
+    const projectAfterRequest = await prisma.project.findUniqueOrThrow({
       where: {
         id: project.id,
       },
     });
 
-  expect(projectAfterRequest.status).toBe("DRAFT");
-  expect(projectAfterRequest.reviewRequestedAt).toBeNull();
-  expect(projectAfterRequest.publishedAt).toBeNull();
+    expect(projectAfterRequest.status).toBe("DRAFT");
+    expect(projectAfterRequest.reviewRequestedAt).toBeNull();
+    expect(projectAfterRequest.publishedAt).toBeNull();
 
-  const auditEvent = await prisma.auditEvent.findFirst({
-    where: {
-      organizationId: workspace.id,
-      actorUserId: owner.id,
-      action: "PROJECT_REVIEW_REJECTED",
-      targetType: "Project",
-      targetId: project.id,
-    },
-  });
-
-  expect(auditEvent?.metadata).toEqual({
-    previousStatus: "REVIEW",
-    newStatus: "DRAFT",
-  });
-});
-it("rejects returning a DRAFT project to DRAFT without side effects", async () => {
-  const owner = await createTestUser("reject-draft-owner");
-
-  const workspace = await createWorkspaceForUser(
-    owner.id,
-    "reject-invalid-state",
-  );
-
-  const project = await createDraftProject(
-    workspace.id,
-    "Already Draft",
-  );
-
-  const ownerCookie = await createAuthenticatedCookie(owner.id);
-
-  await request(app)
-    .post(
-      `/workspaces/${workspace.slug}/projects/${project.id}/reject-review`,
-    )
-    .set("Cookie", ownerCookie)
-    .expect(409)
-    .expect({
-      error: "Only projects in review can be returned to draft",
+    const auditEvent = await prisma.auditEvent.findFirst({
+      where: {
+        organizationId: workspace.id,
+        actorUserId: owner.id,
+        action: "PROJECT_REVIEW_REJECTED",
+        targetType: "Project",
+        targetId: project.id,
+      },
     });
 
-  const projectAfterRequest =
-    await prisma.project.findUniqueOrThrow({
+    expect(auditEvent?.metadata).toEqual({
+      previousStatus: "REVIEW",
+      newStatus: "DRAFT",
+    });
+  });
+
+  it("rejects returning a DRAFT project to DRAFT without side effects", async () => {
+    const owner = await createTestUser("reject-draft-owner");
+    const workspace = await createWorkspaceForUser(
+      owner.id,
+      "reject-invalid-state",
+    );
+    const project = await createDraftProject(
+      workspace.id,
+      "Already Draft",
+    );
+    const ownerCookie = await createAuthenticatedCookie(owner.id);
+
+    await request(app)
+      .post(
+        `/workspaces/${workspace.slug}/projects/${project.id}/reject-review`,
+      )
+      .set("Cookie", ownerCookie)
+      .expect(409)
+      .expect({
+        error: "Only projects in review can be returned to draft",
+      });
+
+    const projectAfterRequest = await prisma.project.findUniqueOrThrow({
       where: {
         id: project.id,
       },
     });
 
-  expect(projectAfterRequest.status).toBe("DRAFT");
-  expect(projectAfterRequest.reviewRequestedAt).toBeNull();
+    expect(projectAfterRequest.status).toBe("DRAFT");
+    expect(projectAfterRequest.reviewRequestedAt).toBeNull();
 
-  const auditCount = await prisma.auditEvent.count({
-    where: {
-      organizationId: workspace.id,
-      action: "PROJECT_REVIEW_REJECTED",
-      targetId: project.id,
-    },
-  });
-
-  expect(auditCount).toBe(0);
-});
-it("returns 404 and preserves the REVIEW project across tenants", async () => {
-  const acmeOwner = await createTestUser(
-    "reject-cross-tenant-acme",
-  );
-
-  const globexOwner = await createTestUser(
-    "reject-cross-tenant-globex",
-  );
-
-  const acmeWorkspace = await createWorkspaceForUser(
-    acmeOwner.id,
-    "reject-acme",
-  );
-
-  const globexWorkspace = await createWorkspaceForUser(
-    globexOwner.id,
-    "reject-globex",
-  );
-
-  const globexProject = await createReviewProject(
-    globexWorkspace.id,
-    "Globex Review Project",
-  );
-
-  const originalReviewRequestedAt =
-    globexProject.reviewRequestedAt;
-
-  const acmeCookie = await createAuthenticatedCookie(acmeOwner.id);
-
-  await request(app)
-    .post(
-      `/workspaces/${acmeWorkspace.slug}/projects/${globexProject.id}/reject-review`,
-    )
-    .set("Cookie", acmeCookie)
-    .expect(404)
-    .expect({
-      error: "Project not found",
+    const auditCount = await prisma.auditEvent.count({
+      where: {
+        organizationId: workspace.id,
+        action: "PROJECT_REVIEW_REJECTED",
+        targetId: project.id,
+      },
     });
 
-  const projectAfterRequest =
-    await prisma.project.findUniqueOrThrow({
+    expect(auditCount).toBe(0);
+  });
+
+  it("returns 404 and preserves the REVIEW project across tenants", async () => {
+    const acmeOwner = await createTestUser("reject-cross-tenant-acme");
+    const globexOwner = await createTestUser(
+      "reject-cross-tenant-globex",
+    );
+    const acmeWorkspace = await createWorkspaceForUser(
+      acmeOwner.id,
+      "reject-acme",
+    );
+    const globexWorkspace = await createWorkspaceForUser(
+      globexOwner.id,
+      "reject-globex",
+    );
+    const globexProject = await createReviewProject(
+      globexWorkspace.id,
+      "Globex Review Project",
+    );
+    const originalReviewRequestedAt = globexProject.reviewRequestedAt;
+    const acmeCookie = await createAuthenticatedCookie(acmeOwner.id);
+
+    await request(app)
+      .post(
+        `/workspaces/${acmeWorkspace.slug}/projects/${globexProject.id}/reject-review`,
+      )
+      .set("Cookie", acmeCookie)
+      .expect(404)
+      .expect({
+        error: "Project not found",
+      });
+
+    const projectAfterRequest = await prisma.project.findUniqueOrThrow({
       where: {
         id: globexProject.id,
       },
     });
 
-  expect(projectAfterRequest.status).toBe("REVIEW");
-  expect(projectAfterRequest.reviewRequestedAt).toEqual(
-    originalReviewRequestedAt,
-  );
+    expect(projectAfterRequest.status).toBe("REVIEW");
+    expect(projectAfterRequest.reviewRequestedAt).toEqual(
+      originalReviewRequestedAt,
+    );
 
-  const auditCount = await prisma.auditEvent.count({
-    where: {
-      organizationId: globexWorkspace.id,
-      action: "PROJECT_REVIEW_REJECTED",
-      targetId: globexProject.id,
-    },
+    const auditCount = await prisma.auditEvent.count({
+      where: {
+        organizationId: globexWorkspace.id,
+        action: "PROJECT_REVIEW_REJECTED",
+        targetId: globexProject.id,
+      },
+    });
+
+    expect(auditCount).toBe(0);
   });
 
-  expect(auditCount).toBe(0);
-});
+  it("rejects project publication without a session", async () => {
+    await request(app)
+      .post(
+        "/workspaces/acme/projects/00000000-0000-0000-0000-000000000000/publish",
+      )
+      .expect(401);
+  });
+
+  it("rejects project publication by an ADMIN without side effects", async () => {
+    const owner = await createTestUser("publish-admin-owner");
+    const admin = await createTestUser("publish-admin");
+    const workspace = await createWorkspaceForUser(
+      owner.id,
+      "publish-admin-forbidden",
+    );
+
+    await addMembership(admin.id, workspace.id, "ADMIN");
+
+    const project = await createReviewProject(
+      workspace.id,
+      "Admin Cannot Publish",
+    );
+    const originalReviewRequestedAt = project.reviewRequestedAt;
+    const adminCookie = await createAuthenticatedCookie(admin.id);
+
+    await request(app)
+      .post(
+        `/workspaces/${workspace.slug}/projects/${project.id}/publish`,
+      )
+      .set("Cookie", adminCookie)
+      .expect(403)
+      .expect({
+        error: "Insufficient permissions",
+      });
+
+    const projectAfterRequest = await prisma.project.findUniqueOrThrow({
+      where: {
+        id: project.id,
+      },
+    });
+
+    expect(projectAfterRequest.status).toBe("REVIEW");
+    expect(projectAfterRequest.reviewRequestedAt).toEqual(
+      originalReviewRequestedAt,
+    );
+    expect(projectAfterRequest.publishedAt).toBeNull();
+
+    const auditCount = await prisma.auditEvent.count({
+      where: {
+        organizationId: workspace.id,
+        action: "PROJECT_PUBLISHED",
+        targetId: project.id,
+      },
+    });
+
+    expect(auditCount).toBe(0);
+  });
+
+  it("allows an OWNER to publish a REVIEW project", async () => {
+    const owner = await createTestUser("publish-owner");
+    const workspace = await createWorkspaceForUser(
+      owner.id,
+      "publish-owner-success",
+    );
+    const project = await createReviewProject(
+      workspace.id,
+      "Owner Publishes",
+    );
+    const originalReviewRequestedAt = project.reviewRequestedAt;
+    const ownerCookie = await createAuthenticatedCookie(owner.id);
+
+    const response = await request(app)
+      .post(
+        `/workspaces/${workspace.slug}/projects/${project.id}/publish`,
+      )
+      .set("Cookie", ownerCookie)
+      .expect(200);
+
+    expect(response.body.project).toMatchObject({
+      id: project.id,
+      name: project.name,
+      status: "PUBLISHED",
+    });
+    expect(response.body.project.reviewRequestedAt).toEqual(
+      originalReviewRequestedAt?.toISOString(),
+    );
+    expect(response.body.project.publishedAt).toEqual(
+      expect.any(String),
+    );
+    expect(response.body.project).not.toHaveProperty("organizationId");
+
+    const projectAfterRequest = await prisma.project.findUniqueOrThrow({
+      where: {
+        id: project.id,
+      },
+    });
+
+    expect(projectAfterRequest.status).toBe("PUBLISHED");
+    expect(projectAfterRequest.reviewRequestedAt).toEqual(
+      originalReviewRequestedAt,
+    );
+    expect(projectAfterRequest.publishedAt).toBeInstanceOf(Date);
+
+    const auditEvent = await prisma.auditEvent.findFirst({
+      where: {
+        organizationId: workspace.id,
+        actorUserId: owner.id,
+        action: "PROJECT_PUBLISHED",
+        targetType: "Project",
+        targetId: project.id,
+      },
+    });
+
+    expect(auditEvent?.metadata).toEqual({
+      previousStatus: "REVIEW",
+      newStatus: "PUBLISHED",
+    });
+  });
+
+  it("rejects direct publication of a DRAFT project without side effects", async () => {
+    const owner = await createTestUser("publish-draft-owner");
+    const workspace = await createWorkspaceForUser(
+      owner.id,
+      "publish-draft-forbidden",
+    );
+    const project = await createDraftProject(
+      workspace.id,
+      "Unreviewed Draft",
+    );
+    const ownerCookie = await createAuthenticatedCookie(owner.id);
+
+    await request(app)
+      .post(
+        `/workspaces/${workspace.slug}/projects/${project.id}/publish`,
+      )
+      .set("Cookie", ownerCookie)
+      .expect(409)
+      .expect({
+        error: "Project must be in review before publication",
+      });
+
+    const projectAfterRequest = await prisma.project.findUniqueOrThrow({
+      where: {
+        id: project.id,
+      },
+    });
+
+    expect(projectAfterRequest.status).toBe("DRAFT");
+    expect(projectAfterRequest.reviewRequestedAt).toBeNull();
+    expect(projectAfterRequest.publishedAt).toBeNull();
+
+    const auditCount = await prisma.auditEvent.count({
+      where: {
+        organizationId: workspace.id,
+        action: "PROJECT_PUBLISHED",
+        targetId: project.id,
+      },
+    });
+
+    expect(auditCount).toBe(0);
+  });
+
+  it("rejects repeated publication without additional side effects", async () => {
+    const owner = await createTestUser("publish-repeat-owner");
+    const workspace = await createWorkspaceForUser(
+      owner.id,
+      "publish-repeat",
+    );
+    const project = await createReviewProject(
+      workspace.id,
+      "Publish Once",
+    );
+    const ownerCookie = await createAuthenticatedCookie(owner.id);
+
+    await request(app)
+      .post(
+        `/workspaces/${workspace.slug}/projects/${project.id}/publish`,
+      )
+      .set("Cookie", ownerCookie)
+      .expect(200);
+
+    const firstState = await prisma.project.findUniqueOrThrow({
+      where: {
+        id: project.id,
+      },
+    });
+
+    await request(app)
+      .post(
+        `/workspaces/${workspace.slug}/projects/${project.id}/publish`,
+      )
+      .set("Cookie", ownerCookie)
+      .expect(409)
+      .expect({
+        error: "Project must be in review before publication",
+      });
+
+    const secondState = await prisma.project.findUniqueOrThrow({
+      where: {
+        id: project.id,
+      },
+    });
+
+    expect(secondState.status).toBe("PUBLISHED");
+    expect(secondState.publishedAt).toEqual(firstState.publishedAt);
+
+    const auditCount = await prisma.auditEvent.count({
+      where: {
+        organizationId: workspace.id,
+        actorUserId: owner.id,
+        action: "PROJECT_PUBLISHED",
+        targetId: project.id,
+      },
+    });
+
+    expect(auditCount).toBe(1);
+  });
+
+  it("returns 404 and preserves the REVIEW project across tenants during publication", async () => {
+    const acmeOwner = await createTestUser(
+      "publish-cross-tenant-acme",
+    );
+    const globexOwner = await createTestUser(
+      "publish-cross-tenant-globex",
+    );
+    const acmeWorkspace = await createWorkspaceForUser(
+      acmeOwner.id,
+      "publish-acme",
+    );
+    const globexWorkspace = await createWorkspaceForUser(
+      globexOwner.id,
+      "publish-globex",
+    );
+    const globexProject = await createReviewProject(
+      globexWorkspace.id,
+      "Globex Review Secret",
+    );
+    const originalReviewRequestedAt = globexProject.reviewRequestedAt;
+    const acmeCookie = await createAuthenticatedCookie(acmeOwner.id);
+
+    await request(app)
+      .post(
+        `/workspaces/${acmeWorkspace.slug}/projects/${globexProject.id}/publish`,
+      )
+      .set("Cookie", acmeCookie)
+      .expect(404)
+      .expect({
+        error: "Project not found",
+      });
+
+    const projectAfterRequest = await prisma.project.findUniqueOrThrow({
+      where: {
+        id: globexProject.id,
+      },
+    });
+
+    expect(projectAfterRequest.status).toBe("REVIEW");
+    expect(projectAfterRequest.reviewRequestedAt).toEqual(
+      originalReviewRequestedAt,
+    );
+    expect(projectAfterRequest.publishedAt).toBeNull();
+
+    const auditCount = await prisma.auditEvent.count({
+      where: {
+        organizationId: globexWorkspace.id,
+        action: "PROJECT_PUBLISHED",
+        targetId: globexProject.id,
+      },
+    });
+
+    expect(auditCount).toBe(0);
+  });
 });
