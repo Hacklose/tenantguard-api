@@ -172,7 +172,148 @@ projectRouter.get(
     }
   },
 );
+projectRouter.post(
+  "/:projectId/submit-review",
+  requireAuth,
+  requireWorkspaceMembership,
+  requireWorkspaceRole("OWNER", "ADMIN"),
+  async (req, res, next) => {
+    const workspaceAuth = req.workspaceAuth;
+    const auth = req.auth;
 
+    if (!workspaceAuth || !auth) {
+      return next(
+        new Error("Workspace authorization context is missing."),
+      );
+    }
+
+    const parsedProjectId = projectIdParamSchema.safeParse(
+      req.params.projectId,
+    );
+
+    if (!parsedProjectId.success) {
+      return res.status(404).json({
+        error: "Project not found",
+      });
+    }
+
+    try {
+      const result = await prisma.$transaction(async (tx) => {
+        /*
+         * Первая проверка отвечает на вопрос:
+         * существует ли этот проект внутри текущего tenant?
+         */
+        const existingProject = await tx.project.findFirst({
+          where: {
+            id: parsedProjectId.data,
+            organizationId: workspaceAuth.organizationId,
+          },
+          select: {
+            id: true,
+            name: true,
+            status: true,
+          },
+        });
+
+        if (!existingProject) {
+          return {
+            kind: "not-found" as const,
+          };
+        }
+
+        /*
+         * Перейти в REVIEW можно только из DRAFT.
+         */
+        if (existingProject.status !== "DRAFT") {
+          return {
+            kind: "invalid-state" as const,
+          };
+        }
+
+        const reviewRequestedAt = new Date();
+
+        /*
+         * Состояние проверяется повторно внутри UPDATE.
+         *
+         * Это защищает от ситуации, когда между первым чтением
+         * и обновлением другой запрос уже изменил статус проекта.
+         */
+        const transition = await tx.project.updateMany({
+          where: {
+            id: existingProject.id,
+            organizationId: workspaceAuth.organizationId,
+            status: "DRAFT",
+          },
+          data: {
+            status: "REVIEW",
+            reviewRequestedAt,
+            publishedAt: null,
+          },
+        });
+
+        if (transition.count !== 1) {
+          return {
+            kind: "invalid-state" as const,
+          };
+        }
+
+        const updatedProject = await tx.project.findFirstOrThrow({
+          where: {
+            id: existingProject.id,
+            organizationId: workspaceAuth.organizationId,
+          },
+          select: {
+            id: true,
+            name: true,
+            description: true,
+            status: true,
+            reviewRequestedAt: true,
+            publishedAt: true,
+            createdAt: true,
+            updatedAt: true,
+          },
+        });
+
+        await tx.auditEvent.create({
+          data: {
+            organizationId: workspaceAuth.organizationId,
+            actorUserId: auth.userId,
+            action: "PROJECT_REVIEW_SUBMITTED",
+            targetType: "Project",
+            targetId: existingProject.id,
+            metadata: {
+              previousStatus: "DRAFT",
+              newStatus: "REVIEW",
+            },
+          },
+        });
+
+        return {
+          kind: "success" as const,
+          project: updatedProject,
+        };
+      });
+
+      if (result.kind === "not-found") {
+        return res.status(404).json({
+          error: "Project not found",
+        });
+      }
+
+      if (result.kind === "invalid-state") {
+        return res.status(409).json({
+          error: "Only draft projects can be submitted for review",
+        });
+      }
+
+      return res.status(200).json({
+        project: result.project,
+      });
+    } catch (error) {
+      return next(error);
+    }
+  },
+);
 projectRouter.patch(
   "/:projectId",
   requireAuth,
