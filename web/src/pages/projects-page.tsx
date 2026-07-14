@@ -17,7 +17,7 @@ import {
   deleteProject,
 } from "../api/projects";
 import { useWorkspace } from "../hooks/use-workspace";
-import { canManageProjects } from "../types";
+import { canManageProjects, canMutateProject } from "../types";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Modal } from "../components/ui/modal";
@@ -25,6 +25,7 @@ import { Card } from "../components/ui/card";
 import { Spinner } from "../components/ui/spinner";
 import { EmptyState } from "../components/empty-state";
 import { ErrorState } from "../components/error-state";
+import { ProjectStatusBadge } from "../components/project-status-badge";
 import { getErrorMessage, useHandleApiError } from "../hooks/use-error";
 
 const createSchema = z.object({
@@ -199,61 +200,84 @@ function ProjectsPage() {
         />
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {projects.map((project) => (
-            <Link
-              key={project.id}
-              to={`/app/workspaces/${slug}/projects/${project.id}`}
-              className="block"
-            >
-              <Card hover>
-                <div className="flex items-start justify-between">
-                  <div className="flex-1 min-w-0">
-                    <h3 className="font-semibold text-slate-100 truncate">
-                      {project.name}
-                    </h3>
-                    {project.description && (
-                      <p className="mt-1 text-xs text-slate-500 line-clamp-2">
-                        {project.description}
-                      </p>
+          {projects.map((project) => {
+            const canEdit =
+              currentRole
+                ? canMutateProject(currentRole, project.status)
+                : false;
+
+            return (
+              <Card key={project.id}>
+                <Link
+                  to={`/app/workspaces/${slug}/projects/${project.id}`}
+                  className="block"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <h3 className="font-semibold text-slate-100 truncate">
+                          {project.name}
+                        </h3>
+                        <ProjectStatusBadge status={project.status} />
+                      </div>
+                      {project.description && (
+                        <p className="mt-1 text-xs text-slate-500 line-clamp-2">
+                          {project.description}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-600">
+                    <span>
+                      Updated{" "}
+                      {new Date(project.updatedAt).toLocaleDateString()}
+                    </span>
+                    {project.reviewRequestedAt && (
+                      <span>
+                        Review requested{" "}
+                        {new Date(
+                          project.reviewRequestedAt,
+                        ).toLocaleDateString()}
+                      </span>
+                    )}
+                    {project.publishedAt && (
+                      <span>
+                        Published{" "}
+                        {new Date(project.publishedAt).toLocaleDateString()}
+                      </span>
                     )}
                   </div>
-                  {canManage && (
-                    <div
-                      className="ml-2 flex shrink-0 gap-0.5"
-                      onClick={(e) => e.stopPropagation()}
+                </Link>
+                {canEdit && (
+                  <div className="mt-3 flex gap-0.5 border-t border-surface-700 pt-3">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 w-7 p-0"
+                      onClick={() => openEdit(project)}
+                      aria-label="Edit project"
                     >
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-7 w-7 p-0"
-                        onClick={() => openEdit(project)}
-                        aria-label="Edit project"
-                      >
-                        <Pencil className="h-3.5 w-3.5" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-7 w-7 p-0"
-                        onClick={() =>
-                          setDeleteTarget({
-                            id: project.id,
-                            name: project.name,
-                          })
-                        }
-                        aria-label="Delete project"
-                      >
-                        <Trash2 className="h-3.5 w-3.5 text-red-400" />
-                      </Button>
-                    </div>
-                  )}
-                </div>
-                <div className="mt-3 text-xs text-slate-600">
-                  Updated {new Date(project.updatedAt).toLocaleDateString()}
-                </div>
+                      <Pencil className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 w-7 p-0"
+                      onClick={() =>
+                        setDeleteTarget({
+                          id: project.id,
+                          name: project.name,
+                        })
+                      }
+                      aria-label="Delete project"
+                    >
+                      <Trash2 className="h-3.5 w-3.5 text-red-400" />
+                    </Button>
+                  </div>
+                )}
               </Card>
-            </Link>
-          ))}
+            );
+          })}
         </div>
       )}
 

@@ -78,3 +78,36 @@ export async function deleteProject(
     },
   );
 }
+
+export async function submitProjectForReview(
+  workspaceSlug: string,
+  projectId: string,
+): Promise<Project> {
+  const result = await request<ProjectResponse>(
+    `/workspaces/${workspaceSlug}/projects/${projectId}/submit-review`,
+    { method: "POST" },
+  );
+  return result.project;
+}
+
+export async function rejectProjectReview(
+  workspaceSlug: string,
+  projectId: string,
+): Promise<Project> {
+  const result = await request<ProjectResponse>(
+    `/workspaces/${workspaceSlug}/projects/${projectId}/reject-review`,
+    { method: "POST" },
+  );
+  return result.project;
+}
+
+export async function publishProject(
+  workspaceSlug: string,
+  projectId: string,
+): Promise<Project> {
+  const result = await request<ProjectResponse>(
+    `/workspaces/${workspaceSlug}/projects/${projectId}/publish`,
+    { method: "POST" },
+  );
+  return result.project;
+}

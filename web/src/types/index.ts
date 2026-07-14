@@ -1,5 +1,7 @@
 export type MembershipRole = "OWNER" | "ADMIN" | "MEMBER";
 
+export type ProjectStatus = "DRAFT" | "REVIEW" | "PUBLISHED";
+
 export interface User {
   id: string;
   email: string;
@@ -27,6 +29,9 @@ export interface Project {
   id: string;
   name: string;
   description: string | null;
+  status: ProjectStatus;
+  reviewRequestedAt: string | null;
+  publishedAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -46,4 +51,19 @@ export function canManageWorkspace(role: MembershipRole): boolean {
 
 export function canManageProjects(role: MembershipRole): boolean {
   return role === "OWNER" || role === "ADMIN";
+}
+
+export function canSubmitProjectForReview(role: MembershipRole): boolean {
+  return role === "OWNER" || role === "ADMIN";
+}
+
+export function canApproveProjectWorkflow(role: MembershipRole): boolean {
+  return role === "OWNER";
+}
+
+export function canMutateProject(
+  role: MembershipRole,
+  status: ProjectStatus,
+): boolean {
+  return canManageProjects(role) && status === "DRAFT";
 }

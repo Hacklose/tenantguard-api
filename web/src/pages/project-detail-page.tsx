@@ -4,10 +4,29 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { Pencil, Trash2, ChevronRight } from "lucide-react";
-import { fetchProject, updateProject, deleteProject } from "../api/projects";
+import {
+  Pencil,
+  Trash2,
+  ChevronRight,
+  Send,
+  RotateCcw,
+  CheckCircle,
+} from "lucide-react";
+import {
+  fetchProject,
+  updateProject,
+  deleteProject,
+  submitProjectForReview,
+  rejectProjectReview,
+  publishProject,
+} from "../api/projects";
 import { useWorkspace } from "../hooks/use-workspace";
-import { canManageProjects } from "../types";
+import {
+  canManageProjects,
+  canMutateProject,
+  canSubmitProjectForReview,
+  canApproveProjectWorkflow,
+} from "../types";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Modal } from "../components/ui/modal";
@@ -15,6 +34,7 @@ import { Card } from "../components/ui/card";
 import { Spinner } from "../components/ui/spinner";
 import { ErrorState } from "../components/error-state";
 import { NotFoundPage } from "./not-found-page";
+import { ProjectStatusBadge } from "../components/project-status-badge";
 import { getErrorMessage, useHandleApiError } from "../hooks/use-error";
 
 const editSchema = z.object({
@@ -41,6 +61,10 @@ function ProjectDetailPage() {
     description: string | null;
   } | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<{
+    id: string;
+    name: string;
+  } | null>(null);
+  const [publishTarget, setPublishTarget] = useState<{
     id: string;
     name: string;
   } | null>(null);
@@ -93,6 +117,52 @@ function ProjectDetailPage() {
     },
   });
 
+  const submitReviewMutation = useMutation({
+    mutationFn: () => submitProjectForReview(slug, id),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["project", slug, id] }),
+        queryClient.invalidateQueries({ queryKey: ["projects", slug] }),
+      ]);
+      setServerError(null);
+    },
+    onError: (err) => {
+      handleApiError(err);
+      setServerError(getErrorMessage(err));
+    },
+  });
+
+  const rejectReviewMutation = useMutation({
+    mutationFn: () => rejectProjectReview(slug, id),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["project", slug, id] }),
+        queryClient.invalidateQueries({ queryKey: ["projects", slug] }),
+      ]);
+      setServerError(null);
+    },
+    onError: (err) => {
+      handleApiError(err);
+      setServerError(getErrorMessage(err));
+    },
+  });
+
+  const publishMutation = useMutation({
+    mutationFn: () => publishProject(slug, id),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["project", slug, id] }),
+        queryClient.invalidateQueries({ queryKey: ["projects", slug] }),
+      ]);
+      setPublishTarget(null);
+      setServerError(null);
+    },
+    onError: (err) => {
+      handleApiError(err);
+      setServerError(getErrorMessage(err));
+    },
+  });
+
   const editForm = useForm<EditForm>({
     resolver: zodResolver(editSchema),
   });
@@ -108,6 +178,10 @@ function ProjectDetailPage() {
     });
     setServerError(null);
     setEditTarget(project);
+  }
+
+  function clearError() {
+    setServerError(null);
   }
 
   if (isLoading) {
@@ -133,6 +207,22 @@ function ProjectDetailPage() {
     return <NotFoundPage />;
   }
 
+  const workflowPending =
+    submitReviewMutation.isPending ||
+    rejectReviewMutation.isPending ||
+    publishMutation.isPending;
+
+  const canEditProject =
+    currentRole ? canMutateProject(currentRole, project.status) : false;
+  const canSubmitReview =
+    currentRole
+      ? canSubmitProjectForReview(currentRole) && project.status === "DRAFT"
+      : false;
+  const canApproveWorkflow =
+    currentRole
+      ? canApproveProjectWorkflow(currentRole) && project.status === "REVIEW"
+      : false;
+
   return (
     <div className="page-container space-y-6">
       {/* Back navigation */}
@@ -147,18 +237,21 @@ function ProjectDetailPage() {
       {/* Project detail */}
       <Card>
         <div className="flex items-start justify-between">
-          <div>
-            <h2 className="text-xl font-bold text-slate-100">
-              {project.name}
-            </h2>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-3 flex-wrap">
+              <h2 className="text-xl font-bold text-slate-100">
+                {project.name}
+              </h2>
+              <ProjectStatusBadge status={project.status} />
+            </div>
             {project.description && (
               <p className="mt-2 text-sm text-slate-400">
                 {project.description}
               </p>
             )}
           </div>
-          {canManage && (
-            <div className="flex gap-2">
+          {canEditProject && (
+            <div className="flex gap-2 ml-4 shrink-0">
               <Button
                 variant="ghost"
                 size="sm"
@@ -181,13 +274,111 @@ function ProjectDetailPage() {
             </div>
           )}
         </div>
-        <div className="mt-4 flex gap-4 text-xs text-slate-500">
+        <div className="mt-4 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500">
           <span>
             Created: {new Date(project.createdAt).toLocaleDateString()}
           </span>
           <span>
             Updated: {new Date(project.updatedAt).toLocaleDateString()}
           </span>
+          {project.reviewRequestedAt && (
+            <span>
+              Review requested:{" "}
+              {new Date(project.reviewRequestedAt).toLocaleDateString()}
+            </span>
+          )}
+          {project.publishedAt && (
+            <span>
+              Published:{" "}
+              {new Date(project.publishedAt).toLocaleDateString()}
+            </span>
+          )}
+        </div>
+      </Card>
+
+      {/* Server error banner */}
+      {serverError && (
+        <div
+          className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-400"
+          role="alert"
+        >
+          {serverError}
+        </div>
+      )}
+
+      {/* Workflow actions */}
+      <Card>
+        <h3 className="text-sm font-semibold text-slate-300">Actions</h3>
+
+        {project.status === "PUBLISHED" && (
+          <p className="mt-3 text-sm text-slate-500">
+            Published projects are read-only.
+          </p>
+        )}
+
+        {project.status === "REVIEW" && !canApproveWorkflow && canManage && (
+          <p className="mt-3 text-sm text-slate-500">
+            This project is locked while awaiting owner review.
+          </p>
+        )}
+
+        {project.status === "DRAFT" && !canManage && (
+          <p className="mt-3 text-sm text-slate-500">
+            You don&apos;t have permission to modify this project.
+          </p>
+        )}
+
+        <div className="mt-4 flex flex-wrap gap-2">
+          {/* DRAFT actions */}
+          {canSubmitReview && (
+            <Button
+              onClick={() => {
+                clearError();
+                submitReviewMutation.mutate();
+              }}
+              variant="primary"
+              size="sm"
+              loading={submitReviewMutation.isPending}
+              disabled={workflowPending}
+            >
+              <Send className="h-4 w-4" />
+              Submit for review
+            </Button>
+          )}
+
+          {/* REVIEW actions — OWNER only */}
+          {canApproveWorkflow && (
+            <>
+              <Button
+                onClick={() => {
+                  clearError();
+                  rejectReviewMutation.mutate();
+                }}
+                variant="secondary"
+                size="sm"
+                loading={rejectReviewMutation.isPending}
+                disabled={workflowPending}
+              >
+                <RotateCcw className="h-4 w-4" />
+                Return to draft
+              </Button>
+              <Button
+                onClick={() => {
+                  clearError();
+                  setPublishTarget({
+                    id: project.id,
+                    name: project.name,
+                  });
+                }}
+                variant="primary"
+                size="sm"
+                disabled={workflowPending}
+              >
+                <CheckCircle className="h-4 w-4" />
+                Publish
+              </Button>
+            </>
+          )}
         </div>
       </Card>
 
@@ -288,6 +479,48 @@ function ProjectDetailPage() {
             }}
           >
             Delete
+          </Button>
+        </div>
+      </Modal>
+
+      {/* Publish Confirmation */}
+      <Modal
+        open={!!publishTarget}
+        onClose={() => setPublishTarget(null)}
+        title="Publish project"
+      >
+        <p className="text-sm text-slate-400">
+          Publish{" "}
+          <span className="font-semibold text-slate-200">
+            &ldquo;{publishTarget?.name}&rdquo;
+          </span>
+          ? The project will become read-only.
+        </p>
+
+        {serverError && (
+          <div
+            className="mt-4 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-400"
+            role="alert"
+          >
+            {serverError}
+          </div>
+        )}
+
+        <div className="mt-6 flex justify-end gap-3">
+          <Button
+            variant="secondary"
+            onClick={() => setPublishTarget(null)}
+          >
+            Cancel
+          </Button>
+          <Button
+            variant="primary"
+            loading={publishMutation.isPending}
+            onClick={() => {
+              if (publishTarget) publishMutation.mutate();
+            }}
+          >
+            Publish
           </Button>
         </div>
       </Modal>
