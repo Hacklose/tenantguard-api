@@ -14,8 +14,12 @@ export const projectRouter = Router({
   mergeParams: true,
 });
 
-
-
+/*
+ * GET /workspaces/:workspaceSlug/projects
+ *
+ * Возвращает только проекты текущего workspace.
+ * organizationId определяется сервером через workspace middleware.
+ */
 projectRouter.get(
   "/",
   requireAuth,
@@ -24,9 +28,7 @@ projectRouter.get(
     const workspaceAuth = req.workspaceAuth;
 
     if (!workspaceAuth) {
-      return next(
-        new Error("Workspace authorization context is missing."),
-      );
+      return next(new Error("Workspace authorization context is missing."));
     }
 
     try {
@@ -55,6 +57,12 @@ projectRouter.get(
   },
 );
 
+/*
+ * POST /workspaces/:workspaceSlug/projects
+ *
+ * Создать проект могут OWNER и ADMIN.
+ * Клиент передаёт только name и description.
+ */
 projectRouter.post(
   "/",
   requireAuth,
@@ -65,9 +73,7 @@ projectRouter.post(
     const auth = req.auth;
 
     if (!workspaceAuth || !auth) {
-      return next(
-        new Error("Workspace authorization context is missing."),
-      );
+      return next(new Error("Workspace authorization context is missing."));
     }
 
     const parsedInput = createProjectInputSchema.safeParse(req.body);
@@ -120,6 +126,12 @@ projectRouter.post(
   },
 );
 
+/*
+ * GET /workspaces/:workspaceSlug/projects/:projectId
+ *
+ * Проект ищется одновременно по projectId и organizationId.
+ * Это tenant-aware query.
+ */
 projectRouter.get(
   "/:projectId",
   requireAuth,
@@ -128,9 +140,7 @@ projectRouter.get(
     const workspaceAuth = req.workspaceAuth;
 
     if (!workspaceAuth) {
-      return next(
-        new Error("Workspace authorization context is missing."),
-      );
+      return next(new Error("Workspace authorization context is missing."));
     }
 
     const parsedProjectId = projectIdParamSchema.safeParse(
@@ -172,6 +182,16 @@ projectRouter.get(
     }
   },
 );
+
+/*
+ * POST /workspaces/:workspaceSlug/projects/:projectId/submit-review
+ *
+ * Безопасный переход:
+ *
+ * DRAFT -> REVIEW
+ *
+ * OWNER и ADMIN могут отправить проект на проверку.
+ */
 projectRouter.post(
   "/:projectId/submit-review",
   requireAuth,
@@ -182,9 +202,7 @@ projectRouter.post(
     const auth = req.auth;
 
     if (!workspaceAuth || !auth) {
-      return next(
-        new Error("Workspace authorization context is missing."),
-      );
+      return next(new Error("Workspace authorization context is missing."));
     }
 
     const parsedProjectId = projectIdParamSchema.safeParse(
@@ -200,8 +218,8 @@ projectRouter.post(
     try {
       const result = await prisma.$transaction(async (tx) => {
         /*
-         * Первая проверка отвечает на вопрос:
-         * существует ли этот проект внутри текущего tenant?
+         * Сначала проверяем существование проекта внутри
+         * текущего workspace.
          */
         const existingProject = await tx.project.findFirst({
           where: {
@@ -222,7 +240,7 @@ projectRouter.post(
         }
 
         /*
-         * Перейти в REVIEW можно только из DRAFT.
+         * На REVIEW можно отправить только DRAFT.
          */
         if (existingProject.status !== "DRAFT") {
           return {
@@ -233,10 +251,10 @@ projectRouter.post(
         const reviewRequestedAt = new Date();
 
         /*
-         * Состояние проверяется повторно внутри UPDATE.
+         * Повторно проверяем статус прямо в условии UPDATE.
          *
-         * Это защищает от ситуации, когда между первым чтением
-         * и обновлением другой запрос уже изменил статус проекта.
+         * Это не позволяет обновить проект, если другой запрос
+         * уже успел изменить его состояние.
          */
         const transition = await tx.project.updateMany({
           where: {
@@ -314,6 +332,149 @@ projectRouter.post(
     }
   },
 );
+
+/*
+ * POST /workspaces/:workspaceSlug/projects/:projectId/reject-review
+ *
+ * Безопасный переход:
+ *
+ * REVIEW -> DRAFT
+ *
+ * Только OWNER может вернуть проект на доработку.
+ */
+projectRouter.post(
+  "/:projectId/reject-review",
+  requireAuth,
+  requireWorkspaceMembership,
+  requireWorkspaceRole("OWNER"),
+  async (req, res, next) => {
+    const workspaceAuth = req.workspaceAuth;
+    const auth = req.auth;
+
+    if (!workspaceAuth || !auth) {
+      return next(new Error("Workspace authorization context is missing."));
+    }
+
+    const parsedProjectId = projectIdParamSchema.safeParse(
+      req.params.projectId,
+    );
+
+    if (!parsedProjectId.success) {
+      return res.status(404).json({
+        error: "Project not found",
+      });
+    }
+
+    try {
+      const result = await prisma.$transaction(async (tx) => {
+        const existingProject = await tx.project.findFirst({
+          where: {
+            id: parsedProjectId.data,
+            organizationId: workspaceAuth.organizationId,
+          },
+          select: {
+            id: true,
+            name: true,
+            status: true,
+          },
+        });
+
+        if (!existingProject) {
+          return {
+            kind: "not-found" as const,
+          };
+        }
+
+        /*
+         * Вернуть в DRAFT можно только проект,
+         * который находится в REVIEW.
+         */
+        if (existingProject.status !== "REVIEW") {
+          return {
+            kind: "invalid-state" as const,
+          };
+        }
+
+        const transition = await tx.project.updateMany({
+          where: {
+            id: existingProject.id,
+            organizationId: workspaceAuth.organizationId,
+            status: "REVIEW",
+          },
+          data: {
+            status: "DRAFT",
+            reviewRequestedAt: null,
+            publishedAt: null,
+          },
+        });
+
+        if (transition.count !== 1) {
+          return {
+            kind: "invalid-state" as const,
+          };
+        }
+
+        const updatedProject = await tx.project.findFirstOrThrow({
+          where: {
+            id: existingProject.id,
+            organizationId: workspaceAuth.organizationId,
+          },
+          select: {
+            id: true,
+            name: true,
+            description: true,
+            status: true,
+            reviewRequestedAt: true,
+            publishedAt: true,
+            createdAt: true,
+            updatedAt: true,
+          },
+        });
+
+        await tx.auditEvent.create({
+          data: {
+            organizationId: workspaceAuth.organizationId,
+            actorUserId: auth.userId,
+            action: "PROJECT_REVIEW_REJECTED",
+            targetType: "Project",
+            targetId: existingProject.id,
+            metadata: {
+              previousStatus: "REVIEW",
+              newStatus: "DRAFT",
+            },
+          },
+        });
+
+        return {
+          kind: "success" as const,
+          project: updatedProject,
+        };
+      });
+
+      if (result.kind === "not-found") {
+        return res.status(404).json({
+          error: "Project not found",
+        });
+      }
+
+      if (result.kind === "invalid-state") {
+        return res.status(409).json({
+          error: "Only projects in review can be returned to draft",
+        });
+      }
+
+      return res.status(200).json({
+        project: result.project,
+      });
+    } catch (error) {
+      return next(error);
+    }
+  },
+);
+
+/*
+ * PATCH /workspaces/:workspaceSlug/projects/:projectId
+ */
 projectRouter.patch(
   "/:projectId",
   requireAuth,
@@ -324,9 +485,7 @@ projectRouter.patch(
     const auth = req.auth;
 
     if (!workspaceAuth || !auth) {
-      return next(
-        new Error("Workspace authorization context is missing."),
-      );
+      return next(new Error("Workspace authorization context is missing."));
     }
 
     const parsedProjectId = projectIdParamSchema.safeParse(
@@ -371,10 +530,14 @@ projectRouter.patch(
           },
           data: {
             ...(parsedInput.data.name !== undefined
-              ? { name: parsedInput.data.name }
+              ? {
+                  name: parsedInput.data.name,
+                }
               : {}),
             ...(parsedInput.data.description !== undefined
-              ? { description: parsedInput.data.description }
+              ? {
+                  description: parsedInput.data.description,
+                }
               : {}),
           },
           select: {
@@ -423,6 +586,10 @@ projectRouter.patch(
     }
   },
 );
+
+/*
+ * DELETE /workspaces/:workspaceSlug/projects/:projectId
+ */
 projectRouter.delete(
   "/:projectId",
   requireAuth,
@@ -433,9 +600,7 @@ projectRouter.delete(
     const auth = req.auth;
 
     if (!workspaceAuth || !auth) {
-      return next(
-        new Error("Workspace authorization context is missing."),
-      );
+      return next(new Error("Workspace authorization context is missing."));
     }
 
     const parsedProjectId = projectIdParamSchema.safeParse(

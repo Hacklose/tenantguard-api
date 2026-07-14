@@ -139,7 +139,20 @@ async function createDraftProject(
     },
   });
 }
-
+async function createReviewProject(
+  organizationId: string,
+  label: string,
+) {
+  return prisma.project.create({
+    data: {
+      organizationId,
+      name: createProjectName(label),
+      description: "Project currently waiting for review",
+      status: "REVIEW",
+      reviewRequestedAt: new Date(),
+    },
+  });
+}
 describe("project publication workflow", () => {
   beforeEach(async () => {
     await deleteWorkflowTestData();
@@ -384,4 +397,226 @@ describe("project publication workflow", () => {
 
     expect(auditCount).toBe(0);
   });
+it("rejects review rejection without a session", async () => {
+  await request(app)
+    .post(
+      "/workspaces/acme/projects/00000000-0000-0000-0000-000000000000/reject-review",
+    )
+    .expect(401);
+});
+it("rejects review rejection by an ADMIN without side effects", async () => {
+  const owner = await createTestUser("reject-admin-owner");
+  const admin = await createTestUser("reject-admin");
+
+  const workspace = await createWorkspaceForUser(
+    owner.id,
+    "reject-admin-forbidden",
+  );
+
+  await addMembership(admin.id, workspace.id, "ADMIN");
+
+  const project = await createReviewProject(
+    workspace.id,
+    "Admin Cannot Reject",
+  );
+
+  const originalReviewRequestedAt = project.reviewRequestedAt;
+  const adminCookie = await createAuthenticatedCookie(admin.id);
+
+  await request(app)
+    .post(
+      `/workspaces/${workspace.slug}/projects/${project.id}/reject-review`,
+    )
+    .set("Cookie", adminCookie)
+    .expect(403)
+    .expect({
+      error: "Insufficient permissions",
+    });
+
+  const projectAfterRequest =
+    await prisma.project.findUniqueOrThrow({
+      where: {
+        id: project.id,
+      },
+    });
+
+  expect(projectAfterRequest.status).toBe("REVIEW");
+  expect(projectAfterRequest.reviewRequestedAt).toEqual(
+    originalReviewRequestedAt,
+  );
+
+  const auditCount = await prisma.auditEvent.count({
+    where: {
+      organizationId: workspace.id,
+      action: "PROJECT_REVIEW_REJECTED",
+      targetId: project.id,
+    },
+  });
+
+  expect(auditCount).toBe(0);
+});
+it("allows an OWNER to return a REVIEW project to DRAFT", async () => {
+  const owner = await createTestUser("reject-owner");
+
+  const workspace = await createWorkspaceForUser(
+    owner.id,
+    "reject-owner-success",
+  );
+
+  const project = await createReviewProject(
+    workspace.id,
+    "Owner Rejects Review",
+  );
+
+  const ownerCookie = await createAuthenticatedCookie(owner.id);
+
+  const response = await request(app)
+    .post(
+      `/workspaces/${workspace.slug}/projects/${project.id}/reject-review`,
+    )
+    .set("Cookie", ownerCookie)
+    .expect(200);
+
+  expect(response.body.project).toMatchObject({
+    id: project.id,
+    name: project.name,
+    status: "DRAFT",
+    reviewRequestedAt: null,
+    publishedAt: null,
+  });
+
+  expect(response.body.project).not.toHaveProperty("organizationId");
+
+  const projectAfterRequest =
+    await prisma.project.findUniqueOrThrow({
+      where: {
+        id: project.id,
+      },
+    });
+
+  expect(projectAfterRequest.status).toBe("DRAFT");
+  expect(projectAfterRequest.reviewRequestedAt).toBeNull();
+  expect(projectAfterRequest.publishedAt).toBeNull();
+
+  const auditEvent = await prisma.auditEvent.findFirst({
+    where: {
+      organizationId: workspace.id,
+      actorUserId: owner.id,
+      action: "PROJECT_REVIEW_REJECTED",
+      targetType: "Project",
+      targetId: project.id,
+    },
+  });
+
+  expect(auditEvent?.metadata).toEqual({
+    previousStatus: "REVIEW",
+    newStatus: "DRAFT",
+  });
+});
+it("rejects returning a DRAFT project to DRAFT without side effects", async () => {
+  const owner = await createTestUser("reject-draft-owner");
+
+  const workspace = await createWorkspaceForUser(
+    owner.id,
+    "reject-invalid-state",
+  );
+
+  const project = await createDraftProject(
+    workspace.id,
+    "Already Draft",
+  );
+
+  const ownerCookie = await createAuthenticatedCookie(owner.id);
+
+  await request(app)
+    .post(
+      `/workspaces/${workspace.slug}/projects/${project.id}/reject-review`,
+    )
+    .set("Cookie", ownerCookie)
+    .expect(409)
+    .expect({
+      error: "Only projects in review can be returned to draft",
+    });
+
+  const projectAfterRequest =
+    await prisma.project.findUniqueOrThrow({
+      where: {
+        id: project.id,
+      },
+    });
+
+  expect(projectAfterRequest.status).toBe("DRAFT");
+  expect(projectAfterRequest.reviewRequestedAt).toBeNull();
+
+  const auditCount = await prisma.auditEvent.count({
+    where: {
+      organizationId: workspace.id,
+      action: "PROJECT_REVIEW_REJECTED",
+      targetId: project.id,
+    },
+  });
+
+  expect(auditCount).toBe(0);
+});
+it("returns 404 and preserves the REVIEW project across tenants", async () => {
+  const acmeOwner = await createTestUser(
+    "reject-cross-tenant-acme",
+  );
+
+  const globexOwner = await createTestUser(
+    "reject-cross-tenant-globex",
+  );
+
+  const acmeWorkspace = await createWorkspaceForUser(
+    acmeOwner.id,
+    "reject-acme",
+  );
+
+  const globexWorkspace = await createWorkspaceForUser(
+    globexOwner.id,
+    "reject-globex",
+  );
+
+  const globexProject = await createReviewProject(
+    globexWorkspace.id,
+    "Globex Review Project",
+  );
+
+  const originalReviewRequestedAt =
+    globexProject.reviewRequestedAt;
+
+  const acmeCookie = await createAuthenticatedCookie(acmeOwner.id);
+
+  await request(app)
+    .post(
+      `/workspaces/${acmeWorkspace.slug}/projects/${globexProject.id}/reject-review`,
+    )
+    .set("Cookie", acmeCookie)
+    .expect(404)
+    .expect({
+      error: "Project not found",
+    });
+
+  const projectAfterRequest =
+    await prisma.project.findUniqueOrThrow({
+      where: {
+        id: globexProject.id,
+      },
+    });
+
+  expect(projectAfterRequest.status).toBe("REVIEW");
+  expect(projectAfterRequest.reviewRequestedAt).toEqual(
+    originalReviewRequestedAt,
+  );
+
+  const auditCount = await prisma.auditEvent.count({
+    where: {
+      organizationId: globexWorkspace.id,
+      action: "PROJECT_REVIEW_REJECTED",
+      targetId: globexProject.id,
+    },
+  });
+
+  expect(auditCount).toBe(0);
+});
 });
