@@ -540,6 +540,8 @@ projectRouter.post(
 
 /*
  * PATCH /workspaces/:workspaceSlug/projects/:projectId
+ *
+ * Редактировать можно только DRAFT-проекты.
  */
 projectRouter.patch(
   "/:projectId",
@@ -585,16 +587,35 @@ projectRouter.patch(
             id: true,
             name: true,
             description: true,
+            status: true,
           },
         });
 
         if (!existingProject) {
-          return null;
+          return {
+            kind: "not-found" as const,
+          };
         }
 
-        const updatedProject = await tx.project.update({
+        /*
+         * После отправки на REVIEW содержимое проекта
+         * считается замороженным.
+         */
+        if (existingProject.status !== "DRAFT") {
+          return {
+            kind: "invalid-state" as const,
+          };
+        }
+
+        /*
+         * Повторно проверяем status непосредственно
+         * во время записи в базу.
+         */
+        const transition = await tx.project.updateMany({
           where: {
             id: existingProject.id,
+            organizationId: workspaceAuth.organizationId,
+            status: "DRAFT",
           },
           data: {
             ...(parsedInput.data.name !== undefined
@@ -608,7 +629,29 @@ projectRouter.patch(
                 }
               : {}),
           },
-          select: projectPublicSelect,
+        });
+
+        if (transition.count !== 1) {
+          return {
+            kind: "invalid-state" as const,
+          };
+        }
+
+        const updatedProject = await tx.project.findFirstOrThrow({
+          where: {
+            id: existingProject.id,
+            organizationId: workspaceAuth.organizationId,
+          },
+          select: {
+            id: true,
+            name: true,
+            description: true,
+            status: true,
+            reviewRequestedAt: true,
+            publishedAt: true,
+            createdAt: true,
+            updatedAt: true,
+          },
         });
 
         await tx.auditEvent.create({
@@ -631,17 +674,26 @@ projectRouter.patch(
           },
         });
 
-        return updatedProject;
+        return {
+          kind: "success" as const,
+          project: updatedProject,
+        };
       });
 
-      if (!result) {
+      if (result.kind === "not-found") {
         return res.status(404).json({
           error: "Project not found",
         });
       }
 
+      if (result.kind === "invalid-state") {
+        return res.status(409).json({
+          error: "Only draft projects can be updated",
+        });
+      }
+
       return res.status(200).json({
-        project: result,
+        project: result.project,
       });
     } catch (error) {
       return next(error);
@@ -651,6 +703,8 @@ projectRouter.patch(
 
 /*
  * DELETE /workspaces/:workspaceSlug/projects/:projectId
+ *
+ * Удалять можно только DRAFT-проекты.
  */
 projectRouter.delete(
   "/:projectId",
@@ -687,18 +741,38 @@ projectRouter.delete(
           select: {
             id: true,
             name: true,
+            status: true,
           },
         });
 
         if (!project) {
-          return null;
+          return {
+            kind: "not-found" as const,
+          };
         }
 
-        await tx.project.delete({
+        if (project.status !== "DRAFT") {
+          return {
+            kind: "invalid-state" as const,
+          };
+        }
+
+        /*
+         * Удаляем только если проект всё ещё DRAFT.
+         */
+        const deletion = await tx.project.deleteMany({
           where: {
             id: project.id,
+            organizationId: workspaceAuth.organizationId,
+            status: "DRAFT",
           },
         });
+
+        if (deletion.count !== 1) {
+          return {
+            kind: "invalid-state" as const,
+          };
+        }
 
         await tx.auditEvent.create({
           data: {
@@ -713,12 +787,20 @@ projectRouter.delete(
           },
         });
 
-        return project;
+        return {
+          kind: "success" as const,
+        };
       });
 
-      if (!result) {
+      if (result.kind === "not-found") {
         return res.status(404).json({
           error: "Project not found",
+        });
+      }
+
+      if (result.kind === "invalid-state") {
+        return res.status(409).json({
+          error: "Only draft projects can be deleted",
         });
       }
 
