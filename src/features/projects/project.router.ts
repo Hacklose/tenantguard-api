@@ -9,21 +9,13 @@ import {
   projectIdParamSchema,
   updateProjectInputSchema,
 } from "./project.schema.js";
+import { projectPublicSelect } from "./project-public.select.js";
+import { findProjectByIdWithinTenant } from "./project-read.policy.js";
+import { findProjectByIdWithoutTenantScope } from "../../labs/bola-001/project-read.policy.js";
 
 export const projectRouter = Router({
   mergeParams: true,
 });
-
-const projectPublicSelect = {
-  id: true,
-  name: true,
-  description: true,
-  status: true,
-  reviewRequestedAt: true,
-  publishedAt: true,
-  createdAt: true,
-  updatedAt: true,
-} as const;
 
 /*
  * GET /workspaces/:workspaceSlug/projects
@@ -150,12 +142,14 @@ projectRouter.get(
     }
 
     try {
-      const project = await prisma.project.findFirst({
-        where: {
-          id: parsedProjectId.data,
-          organizationId: workspaceAuth.organizationId,
-        },
-        select: projectPublicSelect,
+      const findProject =
+        req.app.locals.labMode === true
+          ? findProjectByIdWithoutTenantScope
+          : findProjectByIdWithinTenant;
+
+      const project = await findProject({
+        projectId: parsedProjectId.data,
+        organizationId: workspaceAuth.organizationId,
       });
 
       if (!project) {
