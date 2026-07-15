@@ -96,7 +96,7 @@ Raw session token существует только в HttpOnly cookie.
 │   │   ├── auth/               # register, login, logout, session, rate-limit
 │   │   ├── users/              # GET /me, PATCH /me/profile
 │   │   ├── workspaces/         # CRUD workspaces + membership CRUD + RBAC middleware
-│   │   └── projects/           # CRUD projects (scoped to workspace)
+│   │   └── projects/           # tenant-scoped CRUD + publication workflow
 │   ├── middleware/              # error-handler
 │   └── lib/                    # prisma client, env config
 ├── tests/                      # integration tests
@@ -156,13 +156,35 @@ Raw session token существует только в HttpOnly cookie.
 
 ### Projects
 
-| Method | Path | Body | Roles | Ответ |
-|--------|------|------|-------|-------|
+| Method | Path | Body | Roles | Состояние / ответ |
+|--------|------|------|-------|-------------------|
 | GET | `/workspaces/:slug/projects` | — | Member+ | 200 `{projects[]}` |
-| POST | `/workspaces/:slug/projects` | `{name, description?}` | OWNER, ADMIN | 201 / 422 |
+| POST | `/workspaces/:slug/projects` | `{name, description?}` | OWNER, ADMIN | Создаёт `DRAFT` |
 | GET | `/workspaces/:slug/projects/:id` | — | Member+ | 200 `{project}` / 404 |
-| PATCH | `/workspaces/:slug/projects/:id` | `{name?, description?}` | OWNER, ADMIN | 200 / 404 / 422 |
-| DELETE | `/workspaces/:slug/projects/:id` | — | OWNER, ADMIN | 204 / 404 |
+| PATCH | `/workspaces/:slug/projects/:id` | `{name?, description?}` | OWNER, ADMIN | Только `DRAFT` |
+| DELETE | `/workspaces/:slug/projects/:id` | — | OWNER, ADMIN | Только `DRAFT` |
+| POST | `/workspaces/:slug/projects/:id/submit-review` | — | OWNER, ADMIN | `DRAFT → REVIEW` |
+| POST | `/workspaces/:slug/projects/:id/reject-review` | — | OWNER | `REVIEW → DRAFT` |
+| POST | `/workspaces/:slug/projects/:id/publish` | — | OWNER | `REVIEW → PUBLISHED` |
+
+### Project publication workflow
+
+```text
+DRAFT ──submit-review──> REVIEW ──publish──> PUBLISHED
+  ^                         |
+  └──────reject-review──────┘
+```
+
+Правила состояния:
+
+- `DRAFT` можно редактировать и удалять через OWNER или ADMIN;
+- `REVIEW` нельзя редактировать или удалять;
+- только OWNER может вернуть `REVIEW` в `DRAFT`;
+- только OWNER может опубликовать `REVIEW`;
+- `PUBLISHED` является read-only;
+- клиент не может напрямую передавать `status`, `reviewRequestedAt` или `publishedAt`;
+- каждая смена состояния выполняется server-side и записывает `AuditEvent`;
+- все project-запросы ограничены текущим workspace/tenant.
 
 ---
 
@@ -182,10 +204,13 @@ Raw session token существует только в HttpOnly cookie.
 | Change role | `PATCH /workspaces/:slug/memberships/:id` | `/app/workspaces/:slug/members` |
 | Remove member | `DELETE /workspaces/:slug/memberships/:id` | `/app/workspaces/:slug/members` |
 | List projects | `GET /workspaces/:slug/projects` | `/app/workspaces/:slug/projects` |
-| View project | `GET /workspaces/:slug/projects/:id` | `/app/workspaces/:slug/projects` |
+| View project | `GET /workspaces/:slug/projects/:id` | `/app/workspaces/:slug/projects/:id` |
 | Create project | `POST /workspaces/:slug/projects` | `/app/workspaces/:slug/projects` |
-| Edit project | `PATCH /workspaces/:slug/projects/:id` | `/app/workspaces/:slug/projects` |
-| Delete project | `DELETE /workspaces/:slug/projects/:id` | `/app/workspaces/:slug/projects` |
+| Edit project | `PATCH /workspaces/:slug/projects/:id` | Project detail |
+| Delete project | `DELETE /workspaces/:slug/projects/:id` | Project detail |
+| Submit review | `POST /workspaces/:slug/projects/:id/submit-review` | Project detail |
+| Return to draft | `POST /workspaces/:slug/projects/:id/reject-review` | Project detail |
+| Publish project | `POST /workspaces/:slug/projects/:id/publish` | Project detail |
 
 ---
 
@@ -201,6 +226,7 @@ Raw session token существует только в HttpOnly cookie.
 | 401 → clear cache + redirect | При истечении сессии |
 | Final OWNER защита | Нельзя удалить/понизить последнего OWNER |
 | Workspace slug из URL | Не из тела запроса и не из localStorage |
+| Project workflow authority | Статус меняется только через отдельные backend actions; frontend не является security boundary |
 
 ---
 

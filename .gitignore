@@ -11,3 +11,5 @@ dist/
 
 # Generated Prisma Client
 src/generated/prisma/
+# TypeScript incremental build metadata
+*.tsbuildinfo
