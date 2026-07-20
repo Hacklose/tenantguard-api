@@ -12,6 +12,8 @@ import {
 import { mass001UpdateProjectInputSchema } from "../../labs/mass-001/project-update.schema.js";
 import { projectPublicSelect } from "./project-public.select.js";
 import { findProjectByIdWithinTenant } from "./project-read.policy.js";
+import { canPublishProjectSecurely } from "./project-publish.policy.js";
+import { canPublishProjectWithWorkflow001 } from "../../labs/workflow-001/project-publish.policy.js";
 import { findProjectByIdWithoutTenantScope } from "../../labs/bola-001/project-read.policy.js";
 
 export const projectRouter = Router({
@@ -336,17 +338,28 @@ projectRouter.post(
           };
         }
 
-        if (existingProject.status !== "REVIEW") {
+        const canPublishProject =
+          req.app.locals.labMode === true
+            ? canPublishProjectWithWorkflow001
+            : canPublishProjectSecurely;
+
+        if (
+          !canPublishProject({
+            currentStatus: existingProject.status,
+          })
+        ) {
           return {
             kind: "invalid-state" as const,
           };
         }
 
+        const previousStatus = existingProject.status;
+
         const transition = await tx.project.updateMany({
           where: {
             id: existingProject.id,
             organizationId: workspaceAuth.organizationId,
-            status: "REVIEW",
+            status: previousStatus,
           },
           data: {
             status: "DRAFT",
@@ -460,7 +473,16 @@ projectRouter.post(
           };
         }
 
-        if (existingProject.status !== "REVIEW") {
+        const canPublishProject =
+          req.app.locals.labMode === true
+            ? canPublishProjectWithWorkflow001
+            : canPublishProjectSecurely;
+
+        if (
+          !canPublishProject({
+            currentStatus: existingProject.status,
+          })
+        ) {
           return {
             kind: "invalid-state" as const,
           };
@@ -470,7 +492,7 @@ projectRouter.post(
           where: {
             id: existingProject.id,
             organizationId: workspaceAuth.organizationId,
-            status: "REVIEW",
+            status: existingProject.status,
           },
           data: {
             status: "PUBLISHED",
@@ -500,7 +522,7 @@ projectRouter.post(
             targetType: "Project",
             targetId: existingProject.id,
             metadata: {
-              previousStatus: "REVIEW",
+              previousStatus: existingProject.status,
               newStatus: "PUBLISHED",
             },
           },
