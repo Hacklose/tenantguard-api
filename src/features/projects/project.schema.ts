@@ -1,12 +1,12 @@
 import { z } from "zod";
 
-const projectNameSchema = z
+export const projectNameSchema = z
   .string()
   .trim()
   .min(1, "Project name is required")
   .max(160, "Project name must be at most 160 characters long");
 
-const projectDescriptionSchema = z
+export const projectDescriptionSchema = z
   .string()
   .trim()
   .max(2_000, "Project description must be at most 2000 characters long");
