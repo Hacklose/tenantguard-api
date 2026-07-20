@@ -8,6 +8,7 @@ import {
   updateMembershipRoleInputSchema,
 } from "./membership.schema.js";
 import { requireWorkspaceMembership } from "./require-workspace-membership.js";
+import { requireMembershipRoleChangePermission } from "./require-membership-role-change.js";
 import { requireWorkspaceRole } from "./require-workspace-role.js";
 import { createWorkspaceInputSchema } from "./workspace.schema.js";
 
@@ -298,7 +299,7 @@ workspaceRouter.patch(
   "/:workspaceSlug/memberships/:memberUserId",
   requireAuth,
   requireWorkspaceMembership,
-  requireWorkspaceRole("OWNER"),
+  requireMembershipRoleChangePermission,
   async (req, res, next) => {
     const workspaceAuth = req.workspaceAuth;
     const auth = req.auth;

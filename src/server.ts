@@ -10,7 +10,7 @@ app.listen(env.PORT, env.HOST, () => {
         "",
         "======================================================",
         " WARNING: INTENTIONALLY VULNERABLE LAB MODE ENABLED",
-        " BOLA-001 IS ACTIVE ON THE NORMAL PROJECT ENDPOINT",
+        " BOLA-001 AND RBAC-001 ARE ACTIVE ON NORMAL API ENDPOINTS",
         ` Server: ${address}`,
         " LOCAL SECURITY TRAINING ONLY",
         "======================================================",
