@@ -338,28 +338,17 @@ projectRouter.post(
           };
         }
 
-        const canPublishProject =
-          req.app.locals.labMode === true
-            ? canPublishProjectWithWorkflow001
-            : canPublishProjectSecurely;
-
-        if (
-          !canPublishProject({
-            currentStatus: existingProject.status,
-          })
-        ) {
+        if (existingProject.status !== "REVIEW") {
           return {
             kind: "invalid-state" as const,
           };
         }
 
-        const previousStatus = existingProject.status;
-
         const transition = await tx.project.updateMany({
           where: {
             id: existingProject.id,
             organizationId: workspaceAuth.organizationId,
-            status: previousStatus,
+            status: "REVIEW",
           },
           data: {
             status: "DRAFT",
