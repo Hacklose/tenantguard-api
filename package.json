@@ -4,12 +4,16 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "NODE_ENV=test vitest run",
+    "test": "npm run test:secure",
     "test:watch": "vitest",
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
     "start": "node dist/server.js",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "dev:secure": "HOST=127.0.0.1 LAB_MODE=false tsx watch src/server.ts",
+    "dev:labs": "HOST=127.0.0.1 LAB_MODE=true tsx watch src/server.ts",
+    "test:secure": "NODE_ENV=test LAB_MODE=false vitest run",
+    "test:labs": "NODE_ENV=test LAB_MODE=true vitest run tests/bola-001.integration.test.ts tests/rbac-001.integration.test.ts tests/mass-001.integration.test.ts tests/workflow-001.integration.test.ts"
   },
   "keywords": [],
   "author": "",

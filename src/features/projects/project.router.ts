@@ -9,21 +9,16 @@ import {
   projectIdParamSchema,
   updateProjectInputSchema,
 } from "./project.schema.js";
+import { mass001UpdateProjectInputSchema } from "../../labs/mass-001/project-update.schema.js";
+import { projectPublicSelect } from "./project-public.select.js";
+import { findProjectByIdWithinTenant } from "./project-read.policy.js";
+import { canPublishProjectSecurely } from "./project-publish.policy.js";
+import { canPublishProjectWithWorkflow001 } from "../../labs/workflow-001/project-publish.policy.js";
+import { findProjectByIdWithoutTenantScope } from "../../labs/bola-001/project-read.policy.js";
 
 export const projectRouter = Router({
   mergeParams: true,
 });
-
-const projectPublicSelect = {
-  id: true,
-  name: true,
-  description: true,
-  status: true,
-  reviewRequestedAt: true,
-  publishedAt: true,
-  createdAt: true,
-  updatedAt: true,
-} as const;
 
 /*
  * GET /workspaces/:workspaceSlug/projects
@@ -150,12 +145,14 @@ projectRouter.get(
     }
 
     try {
-      const project = await prisma.project.findFirst({
-        where: {
-          id: parsedProjectId.data,
-          organizationId: workspaceAuth.organizationId,
-        },
-        select: projectPublicSelect,
+      const findProject =
+        req.app.locals.labMode === true
+          ? findProjectByIdWithoutTenantScope
+          : findProjectByIdWithinTenant;
+
+      const project = await findProject({
+        projectId: parsedProjectId.data,
+        organizationId: workspaceAuth.organizationId,
       });
 
       if (!project) {
@@ -341,17 +338,28 @@ projectRouter.post(
           };
         }
 
-        if (existingProject.status !== "REVIEW") {
+        const canPublishProject =
+          req.app.locals.labMode === true
+            ? canPublishProjectWithWorkflow001
+            : canPublishProjectSecurely;
+
+        if (
+          !canPublishProject({
+            currentStatus: existingProject.status,
+          })
+        ) {
           return {
             kind: "invalid-state" as const,
           };
         }
 
+        const previousStatus = existingProject.status;
+
         const transition = await tx.project.updateMany({
           where: {
             id: existingProject.id,
             organizationId: workspaceAuth.organizationId,
-            status: "REVIEW",
+            status: previousStatus,
           },
           data: {
             status: "DRAFT",
@@ -465,7 +473,16 @@ projectRouter.post(
           };
         }
 
-        if (existingProject.status !== "REVIEW") {
+        const canPublishProject =
+          req.app.locals.labMode === true
+            ? canPublishProjectWithWorkflow001
+            : canPublishProjectSecurely;
+
+        if (
+          !canPublishProject({
+            currentStatus: existingProject.status,
+          })
+        ) {
           return {
             kind: "invalid-state" as const,
           };
@@ -475,7 +492,7 @@ projectRouter.post(
           where: {
             id: existingProject.id,
             organizationId: workspaceAuth.organizationId,
-            status: "REVIEW",
+            status: existingProject.status,
           },
           data: {
             status: "PUBLISHED",
@@ -505,7 +522,7 @@ projectRouter.post(
             targetType: "Project",
             targetId: existingProject.id,
             metadata: {
-              previousStatus: "REVIEW",
+              previousStatus: existingProject.status,
               newStatus: "PUBLISHED",
             },
           },
@@ -568,13 +585,24 @@ projectRouter.patch(
       });
     }
 
-    const parsedInput = updateProjectInputSchema.safeParse(req.body);
+    const projectUpdateSchema =
+      req.app.locals.labMode === true
+        ? mass001UpdateProjectInputSchema
+        : updateProjectInputSchema;
+
+    const parsedInput = projectUpdateSchema.safeParse(req.body);
 
     if (!parsedInput.success) {
       return res.status(422).json({
         error: "Invalid project update data",
       });
     }
+
+    const updateInput: {
+      name?: string;
+      description?: string | null;
+      organizationId?: string;
+    } = parsedInput.data;
 
     try {
       const result = await prisma.$transaction(async (tx) => {
@@ -618,14 +646,19 @@ projectRouter.patch(
             status: "DRAFT",
           },
           data: {
-            ...(parsedInput.data.name !== undefined
+            ...(updateInput.name !== undefined
               ? {
-                  name: parsedInput.data.name,
+                  name: updateInput.name,
                 }
               : {}),
-            ...(parsedInput.data.description !== undefined
+            ...(updateInput.description !== undefined
               ? {
-                  description: parsedInput.data.description,
+                  description: updateInput.description,
+                }
+              : {}),
+            ...(updateInput.organizationId !== undefined
+              ? {
+                  organizationId: updateInput.organizationId,
                 }
               : {}),
           },
@@ -637,10 +670,13 @@ projectRouter.patch(
           };
         }
 
+        const resultingOrganizationId =
+          updateInput.organizationId ?? workspaceAuth.organizationId;
+
         const updatedProject = await tx.project.findFirstOrThrow({
           where: {
             id: existingProject.id,
-            organizationId: workspaceAuth.organizationId,
+            organizationId: resultingOrganizationId,
           },
           select: {
             id: true,
