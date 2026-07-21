@@ -332,4 +332,43 @@ describe("WORKFLOW-001 draft publication bypass", () => {
       expect(unchangedProject.status).toBe("DRAFT");
     },
   );
+  it.runIf(isLabMode)(
+    "does not weaken reject-review for a DRAFT project in lab mode",
+    async () => {
+      const fixture = await createDraftProjectFixture();
+
+      await request(testApp)
+        .post(
+          `/workspaces/${fixture.workspace.slug}/projects/${fixture.project.id}/reject-review`,
+        )
+        .set("Cookie", fixture.ownerCookie)
+        .expect(409)
+        .expect({
+          error: "Only projects in review can be returned to draft",
+        });
+
+      const unchangedProject =
+        await prisma.project.findUniqueOrThrow({
+          where: {
+            id: fixture.project.id,
+          },
+        });
+
+      expect(unchangedProject.status).toBe("DRAFT");
+      expect(unchangedProject.reviewRequestedAt).toBeNull();
+      expect(unchangedProject.publishedAt).toBeNull();
+
+      const auditCount = await prisma.auditEvent.count({
+        where: {
+          organizationId: fixture.workspace.id,
+          actorUserId: fixture.owner.id,
+          action: "PROJECT_REVIEW_REJECTED",
+          targetId: fixture.project.id,
+        },
+      });
+
+      expect(auditCount).toBe(0);
+    },
+  );
+
 });
