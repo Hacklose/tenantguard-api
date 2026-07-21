@@ -1,12 +1,22 @@
-FROM node:24-alpine
+FROM node:24-alpine AS build
 
 WORKDIR /app
 
-COPY web/package*.json ./
+COPY package*.json ./
+
 RUN npm ci
 
-COPY web/ ./
+COPY . .
 
-EXPOSE 5173
+RUN npm run build
 
-CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
+
+FROM nginx:alpine AS runtime
+
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+COPY --from=build /app/dist /usr/share/nginx/html
+
+EXPOSE 80
+
+HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=6 \
+  CMD wget -qO- http://127.0.0.1/healthz >/dev/null || exit 1

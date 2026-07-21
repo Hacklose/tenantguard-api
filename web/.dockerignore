@@ -1,9 +1,5 @@
 node_modules
 dist
-web
 .git
-.env
-.env.*
 *.log
 .DS_Store
-src/generated/prisma

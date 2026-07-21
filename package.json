@@ -12,10 +12,11 @@
     "typecheck": "tsc --noEmit",
     "dev:secure": "HOST=127.0.0.1 LAB_MODE=false tsx watch src/server.ts",
     "dev:labs": "HOST=127.0.0.1 LAB_MODE=true tsx watch src/server.ts",
-    "test:secure": "NODE_ENV=test LAB_MODE=false vitest run",
-    "test:labs": "NODE_ENV=test LAB_MODE=true vitest run tests/bola-001.integration.test.ts tests/rbac-001.integration.test.ts tests/mass-001.integration.test.ts tests/workflow-001.integration.test.ts",
+    "test:secure": "npm run test:prepare && NODE_ENV=test LAB_MODE=false vitest run",
+    "test:labs": "npm run test:prepare && NODE_ENV=test LAB_MODE=true vitest run tests/bola-001.integration.test.ts tests/rbac-001.integration.test.ts tests/mass-001.integration.test.ts tests/workflow-001.integration.test.ts",
     "db:seed": "prisma db seed",
-    "db:reset": "tsx scripts/reset-database.ts"
+    "db:reset": "tsx scripts/reset-database.ts",
+    "test:prepare": "NODE_ENV=test prisma migrate deploy"
   },
   "keywords": [],
   "author": "",
