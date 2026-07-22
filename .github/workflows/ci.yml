@@ -6,6 +6,7 @@ on:
       - main
       - "feature/**"
       - "fix/**"
+      - "ci/**"
   pull_request:
     branches:
       - main
@@ -102,13 +103,84 @@ jobs:
         run: npm run build
 
   docker:
-    name: Docker build
+    name: Docker full-stack smoke
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
+
+    env:
+      POSTGRES_USER: tenantguard
+      POSTGRES_PASSWORD: tenantguard_ci_password
+      POSTGRES_DB: tenantguard
+      POSTGRES_TEST_DB: tenantguard_test
+      DEMO_ACCOUNT_PASSWORD: tenantguard_demo_password
+      POSTGRES_PORT: 5432
+      API_PORT: 3000
+      WEB_PORT: 8080
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
 
-      - name: Build Docker image
-        run: docker build --no-cache --tag tenantguard-api:ci .
+      - name: Validate Compose configurations
+        run: |
+          docker compose config -q
+
+          docker compose \
+            -f compose.yaml \
+            -f compose.lab.yaml \
+            config -q
+
+      - name: Start secure full stack
+        run: docker compose up --build -d
+
+      - name: Verify secure mode
+        run: |
+          test "$(
+            docker compose exec -T api printenv LAB_MODE
+          )" = "false"
+
+      - name: Run secure Docker smoke test
+        run: ./scripts/docker-smoke-test.sh
+
+      - name: Stop secure full stack
+        run: docker compose down -v --remove-orphans
+
+      - name: Start vulnerable lab full stack
+        run: |
+          docker compose \
+            -f compose.yaml \
+            -f compose.lab.yaml \
+            up --build -d
+
+      - name: Verify vulnerable lab mode
+        run: |
+          test "$(
+            docker compose \
+              -f compose.yaml \
+              -f compose.lab.yaml \
+              exec -T api printenv LAB_MODE
+          )" = "true"
+
+      - name: Run lab Docker smoke test
+        run: ./scripts/docker-smoke-test.sh
+
+      - name: Show Compose state and logs on failure
+        if: failure()
+        run: |
+          docker compose \
+            -f compose.yaml \
+            -f compose.lab.yaml \
+            ps -a
+
+          docker compose \
+            -f compose.yaml \
+            -f compose.lab.yaml \
+            logs --no-color
+
+      - name: Clean up Docker resources
+        if: always()
+        run: |
+          docker compose \
+            -f compose.yaml \
+            -f compose.lab.yaml \
+            down -v --remove-orphans
