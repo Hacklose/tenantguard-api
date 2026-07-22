@@ -1,6 +1,7 @@
 import { Router, type Response } from "express";
 
 import { prisma } from "../../lib/prisma.js";
+import { runSerializableTransactionWithRetry } from "../../lib/serializable-transaction.js";
 import { requireAuth } from "../auth/require-auth.js";
 import {
   createMembershipInputSchema,
@@ -327,7 +328,7 @@ workspaceRouter.patch(
     }
 
     try {
-      const result = await prisma.$transaction(async (tx) => {
+      const result = await runSerializableTransactionWithRetry(async (tx) => {
         const targetMembership = await tx.membership.findUnique({
           where: {
             userId_organizationId: {
@@ -447,7 +448,7 @@ workspaceRouter.delete(
     }
 
     try {
-      const result = await prisma.$transaction(async (tx) => {
+      const result = await runSerializableTransactionWithRetry(async (tx) => {
         const targetMembership = await tx.membership.findUnique({
           where: {
             userId_organizationId: {
